@@ -1,5 +1,4 @@
 # main.py
-# локальная версия
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
