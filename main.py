@@ -13,6 +13,7 @@ from google_api import add_expense_matrix, get_month_totals
 from config import TOKEN
 
 # edited on GitHub for test pull git
+# PR: улучшен стартовый комментарий test5
 
 
 CATEGORIES = [
