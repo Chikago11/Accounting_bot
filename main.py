@@ -1,0 +1,175 @@
+# main.py
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+)
+from datetime import datetime
+from google_api import add_expense_matrix, get_month_totals
+from config import TOKEN
+
+CATEGORIES = [
+    "Дом, телефон, интернет",
+    "Супермаркет",
+    "Школа Макс",
+    "Секции Макс",
+    "Страховка",
+    "Виза",
+    "Медицина",
+    "Машина/Байк",
+    "Бензин",
+    "Работа",
+    "Психолог",
+    "Миотерапевт",
+    "Разное",
+]
+
+
+# Функция для команды /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user  # достаём объект пользователя
+    name = user.first_name  # берём его имя (как в Телеграме)
+
+    await update.message.reply_text(
+        f"Привет, {name}! Рад тебя видеть 👋\n" f"Я твой бот для учёта бюджета 🤑"
+    )
+
+
+# функция отправки пользователю категорий для добавления расхода
+async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["mode"] = "add"  # режим добавления
+
+    keyboard = [[InlineKeyboardButton(cat, callback_data=cat)] for cat in CATEGORIES]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "Выберите категорию, в которую хотите ДОБАВИТЬ расход:",
+        reply_markup=reply_markup,
+    )
+
+
+# функция отправки пользователю категорий для удаления расхода
+async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["mode"] = "sub"  # режим вычитания
+
+    keyboard = [[InlineKeyboardButton(cat, callback_data=cat)] for cat in CATEGORIES]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "Выберите категорию, из которой хотите ОТНЯТЬ сумму:", reply_markup=reply_markup
+    )
+
+
+# функция выбор категории
+async def category_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Получаем объект callback-запроса
+    query = update.callback_query
+
+    # Обязательно отвечаем на callback, иначе у пользователя будет "крутиться часик"
+    await query.answer()
+
+    # В callback_data мы положили название категории
+    category = query.data
+
+    # Сохраняем выбранную категорию в user_data для этого пользователя
+    context.user_data["category"] = category
+
+    mode = context.user_data.get("mode", "add")
+    if mode == "sub":
+        action_text = "которую хотите ОТНЯТЬ"
+    else:
+        action_text = "которую хотите ДОБАВИТЬ"
+
+    await query.edit_message_text(
+        text=f"Категория: {category}\nТеперь отправь сумму, {action_text}, например: 250"
+    )
+
+
+async def add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Берём выбранную категорию из user_data
+    category = context.user_data.get("category")
+
+    # Если категории нет — значит, пользователь ещё не нажимал кнопку
+    if not category:
+        await update.message.reply_text(
+            "Сначала выбери категорию через команду /add 🙂"
+        )
+        return
+
+    text = update.message.text.strip().replace(",", ".")
+
+    # Пытаемся преобразовать текст в число (разрешим дробные суммы)
+    try:
+        amount = float(text)
+    except ValueError:
+        await update.message.reply_text(
+            "Пожалуйста, введи сумму числом, например 250 или 250.75"
+        )
+        return
+
+    mode = context.user_data.get("mode", "add")
+    if mode == "sub":
+        amount = -amount
+
+    # Запись в Google Sheets
+    add_expense_matrix(category, amount)
+
+    if mode == "sub":
+        await update.message.reply_text(
+            f"Отнял {abs(amount)} из категории «{category}» 👍"
+        )
+    else:
+        await update.message.reply_text(f"Записал {amount} в категорию «{category}» 👍")
+
+    # сбрасываем категорию и режим
+    context.user_data["category"] = None
+    context.user_data["mode"] = "add"
+
+
+async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    month_key = datetime.now().strftime("%Y-%m")
+    totals = get_month_totals(month_key)
+
+    if not totals:
+        await update.message.reply_text("За этот месяц пока нет данных 🙂")
+        return
+
+    lines = [f"📊 Отчёт за {month_key}:\n"]
+
+    for category, amount in totals.items():
+        lines.append(f"• {category}: {round(amount, 2)}")
+
+    await update.message.reply_text("\n".join(lines))
+
+
+# Главная функция, запускающая бота
+def main():
+
+    # Создаём приложение (бота)
+    app = Application.builder().token(TOKEN).build()
+
+    # Добавляем обработчики команд
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("add", add_command))
+    app.add_handler(CommandHandler("sub", sub_command))
+    app.add_handler(CommandHandler("report", report))
+
+    # кнопки
+    app.add_handler(CallbackQueryHandler(category_chosen))
+
+    # текст (сумма)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_amount))
+
+    # Запускаем бота (будет слушать сообщения)
+    print("Bot started...")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
