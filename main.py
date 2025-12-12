@@ -12,6 +12,8 @@ from datetime import datetime
 from google_api import add_expense_matrix, get_month_totals
 from config import TOKEN
 
+# edited on GitHub for test pull git
+
 CATEGORIES = [
     "Дом, телефон, интернет",
     "Супермаркет",
