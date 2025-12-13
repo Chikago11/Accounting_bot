@@ -14,7 +14,7 @@ from config import TOKEN
 
 # edited on GitHub for test pull git
 # PR: улучшен стартовый комментарий test5
-
+# test direct commit to master
 
 CATEGORIES = [
     "Дом, телефон, интернет",
