@@ -108,7 +108,7 @@ async def add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Пожалуйста, введи сумму числом, например 250 или 250.75"
         )
         return
-        
+
     # Режим "бюджет Андрея" (если пользователь вызвал /andrei_add или /andrei_sub)
     mode = context.user_data.get("mode")
     if mode in ("add_amb", "sub_amb"):
@@ -117,9 +117,13 @@ async def add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if andrei_mb(mode, abs(amount)):
             if mode == "sub_amb":
-                await update.message.reply_text(f"Отнял {abs(amount)} из бюджета Андрея 👍")
+                await update.message.reply_text(
+                    f"Отнял {abs(amount)} из бюджета Андрея 👍"
+                )
             else:
-                await update.message.reply_text(f"Записал {abs(amount)} в бюджет Андрея 👍")
+                await update.message.reply_text(
+                    f"Записал {abs(amount)} в бюджет Андрея 👍"
+                )
 
         context.user_data["mode"] = None
         return
@@ -168,16 +172,21 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("\n".join(lines))
 
+
 async def andrei_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    await update.message.reply_text("Какую сумму добавить в бюджет Андрея, например: 250")
+    await update.message.reply_text(
+        "Какую сумму добавить в бюджет Андрея, например: 250"
+    )
 
     context.user_data["mode"] = "add_amb"
 
 
 async def andrei_sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    await update.message.reply_text("Какую сумму отнять из бюджета Андрея, например: 250")
+    await update.message.reply_text(
+        "Какую сумму отнять из бюджета Андрея, например: 250"
+    )
 
     context.user_data["mode"] = "sub_amb"
 
