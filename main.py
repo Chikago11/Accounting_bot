@@ -1,4 +1,5 @@
 # main.py
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -9,7 +10,7 @@ from telegram.ext import (
     filters,
 )
 from datetime import datetime
-from google_api import add_expense_matrix, get_month_totals
+from google_api import add_expense_matrix, andrei_mb, get_month_totals
 from config import TOKEN
 
 # edited on GitHub for test pull git
@@ -96,15 +97,6 @@ async def category_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Берём выбранную категорию из user_data
-    category = context.user_data.get("category")
-
-    # Если категории нет — значит, пользователь ещё не нажимал кнопку
-    if not category:
-        await update.message.reply_text(
-            "Сначала выбери категорию через команду /add 🙂"
-        )
-        return
 
     text = update.message.text.strip().replace(",", ".")
 
@@ -114,6 +106,31 @@ async def add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text(
             "Пожалуйста, введи сумму числом, например 250 или 250.75"
+        )
+        return
+        
+    # Режим "бюджет Андрея" (если пользователь вызвал /andrei_add или /andrei_sub)
+    mode = context.user_data.get("mode")
+    if mode in ("add_amb", "sub_amb"):
+        if mode == "sub_amb":
+            amount = -abs(amount)
+
+        if andrei_mb(mode, abs(amount)):
+            if mode == "sub_amb":
+                await update.message.reply_text(f"Отнял {abs(amount)} из бюджета Андрея 👍")
+            else:
+                await update.message.reply_text(f"Записал {abs(amount)} в бюджет Андрея 👍")
+
+        context.user_data["mode"] = None
+        return
+
+    # Берём выбранную категорию из user_data
+    category = context.user_data.get("category")
+
+    # Если категории нет — значит, пользователь ещё не нажимал кнопку
+    if not category:
+        await update.message.reply_text(
+            "Сначала выбери категорию через команду /add 🙂"
         )
         return
 
@@ -151,9 +168,22 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("\n".join(lines))
 
+async def andrei_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    await update.message.reply_text("Какую сумму добавить в бюджет Андрея, например: 250")
+
+    context.user_data["mode"] = "add_amb"
+
+
+async def andrei_sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    await update.message.reply_text("Какую сумму отнять из бюджета Андрея, например: 250")
+
+    context.user_data["mode"] = "sub_amb"
+
 
 # Главная функция, запускающая бота
-def main():
+async def main():
 
     # Создаём приложение (бота)
     app = Application.builder().token(TOKEN).build()
@@ -162,6 +192,8 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("add", add_command))
     app.add_handler(CommandHandler("sub", sub_command))
+    app.add_handler(CommandHandler("andrei_add", andrei_add_command))
+    app.add_handler(CommandHandler("andrei_sub", andrei_sub_command))
     app.add_handler(CommandHandler("report", report))
 
     # кнопки
@@ -170,10 +202,21 @@ def main():
     # текст (сумма)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_amount))
 
-    # Запускаем бота (будет слушать сообщения)
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+
     print("Bot started...")
-    app.run_polling()
+
+    # держим процесс живым
+    stop_event = asyncio.Event()
+    try:
+        await stop_event.wait()
+    finally:
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
