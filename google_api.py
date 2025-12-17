@@ -3,6 +3,22 @@ from datetime import datetime
 from config import GOOGLE_SERVICE_ACCOUNT_FILE, SPREADSHEET_NAME
 
 
+def andrei_mb(act: str, amount: float):
+    gc = gspread.service_account(GOOGLE_SERVICE_ACCOUNT_FILE)
+    sh = gc.open(SPREADSHEET_NAME)
+    ls = sh.worksheet("andrei_mb")
+    value = ls.cell(1, 2).value
+    current = float(value) if value else 0.0
+    if act == "add_amb":
+        new_value = current + amount
+    elif act == "sub_amb":
+        new_value = current - amount
+    else:
+        return False
+    ls.update_cell(1, 2, new_value)
+    return True
+
+
 def get_sheet():
     gc = gspread.service_account(GOOGLE_SERVICE_ACCOUNT_FILE)
     sh = gc.open(SPREADSHEET_NAME)
