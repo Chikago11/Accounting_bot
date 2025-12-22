@@ -10,7 +10,7 @@ from telegram.ext import (
     filters,
 )
 from datetime import datetime
-from google_api import add_expense_matrix, andrei_mb, get_month_totals
+from google_api import add_expense_matrix, andrei_but, andrei_mb, get_month_totals
 from config import TOKEN
 
 # edited on GitHub for test pull git
@@ -190,6 +190,12 @@ async def andrei_sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     context.user_data["mode"] = "sub_amb"
 
+async def andrei_but_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        
+    await update.message.reply_text(
+        f"Бюджет Андрея: {andrei_but()} THB"
+    )   
+
 
 # Главная функция, запускающая бота
 async def main():
@@ -204,6 +210,7 @@ async def main():
     app.add_handler(CommandHandler("andrei_add", andrei_add_command))
     app.add_handler(CommandHandler("andrei_sub", andrei_sub_command))
     app.add_handler(CommandHandler("report", report))
+    app.add_handler(CommandHandler("andrei_but", andrei_but_command))
 
     # кнопки
     app.add_handler(CallbackQueryHandler(category_chosen))
