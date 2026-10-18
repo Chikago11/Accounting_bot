@@ -3,15 +3,17 @@ import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
+    ApplicationHandlerStop,
     CommandHandler,
     ContextTypes,
     CallbackQueryHandler,
     MessageHandler,
     filters,
+    TypeHandler,
 )
 from datetime import datetime
 from google_api import add_expense_matrix, andrei_but, andrei_mb, get_month_totals
-from config import TOKEN
+from config import ALLOWED_USER_IDS, TOKEN
 
 # edited on GitHub for test pull git
 # PR: улучшен стартовый комментарий test5
@@ -32,6 +34,29 @@ CATEGORIES = [
     "Миотерапевт",
     "Разное",
 ]
+
+
+# Пускаем к боту только тех, чьи ID есть в ALLOWED_USER_IDS в .env
+async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user and user.id in ALLOWED_USER_IDS:
+        return
+
+    user_id = user.id if user else None
+    print(
+        f"Access denied: id={user_id} name={user.full_name if user else None}",
+        flush=True,
+    )
+
+    if update.callback_query:
+        await update.callback_query.answer("Нет доступа", show_alert=True)
+    elif update.effective_message:
+        await update.effective_message.reply_text(
+            f"Нет доступа. Ваш Telegram ID: {user_id}"
+        )
+
+    # остальные обработчики не запускаем
+    raise ApplicationHandlerStop
 
 
 # Функция для команды /start
@@ -202,6 +227,9 @@ async def main():
 
     # Создаём приложение (бота)
     app = Application.builder().token(TOKEN).build()
+
+    # Проверка доступа срабатывает раньше всех остальных обработчиков
+    app.add_handler(TypeHandler(Update, check_access), group=-1)
 
     # Добавляем обработчики команд
     app.add_handler(CommandHandler("start", start))
