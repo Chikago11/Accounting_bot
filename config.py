@@ -7,6 +7,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 # все настройки и секреты лежат в .env (он не попадает в git)
 load_dotenv(BASE_DIR / ".env")
+DATA_DIR = Path(os.getenv("VOICE_DATA_DIR", str(BASE_DIR / "data")))
 
 # токен бота из BotFather
 TOKEN = os.environ["TELEGRAM_TOKEN"]

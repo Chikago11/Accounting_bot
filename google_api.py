@@ -1,56 +1,95 @@
 import gspread
 from datetime import datetime
-from config import GOOGLE_SERVICE_ACCOUNT_FILE, SPREADSHEET_NAME
+from decimal import Decimal
+from functools import wraps
+import fcntl
+import threading
+from config import DATA_DIR, GOOGLE_SERVICE_ACCOUNT_FILE, SPREADSHEET_NAME
+
+_write_lock = threading.RLock()
+
+
+def serialized_write(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        DATA_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with _write_lock, (DATA_DIR / "sheets-write.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                return function(*args, **kwargs)
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+    return wrapped
+
+
+def decimal_value(value):
+    amount = Decimal(str(value)) if value not in (None, "") else Decimal("0")
+    if not amount.is_finite():
+        raise ValueError("Invalid money value")
+    return amount
+
+
+def client():
+    gc = gspread.service_account(GOOGLE_SERVICE_ACCOUNT_FILE)
+    gc.set_timeout(20)
+    return gc
+
 
 def andrei_but():
-    gc = gspread.service_account(GOOGLE_SERVICE_ACCOUNT_FILE)
+    gc = client()
     sh = gc.open(SPREADSHEET_NAME)
     ls = sh.worksheet("andrei_mb")
     value = ls.cell(1, 2).value
-    return float(value) if value else 0.0
+    return decimal_value(value)
 
+
+@serialized_write
 def andrei_mb(act: str, amount: float):
-    gc = gspread.service_account(GOOGLE_SERVICE_ACCOUNT_FILE)
+    gc = client()
     sh = gc.open(SPREADSHEET_NAME)
     ls = sh.worksheet("andrei_mb")
     value = ls.cell(1, 2).value
-    current = float(value) if value else 0.0
+    current = decimal_value(value)
+    amount = decimal_value(amount)
     if act == "add_amb":
         new_value = current + amount
     elif act == "sub_amb":
         new_value = current - amount
     else:
         return False
-    ls.update_cell(1, 2, new_value)
+    ls.update_cell(1, 2, float(new_value))
     return True
 
 
 def max_but():
-    gc = gspread.service_account(GOOGLE_SERVICE_ACCOUNT_FILE)
+    gc = client()
     sh = gc.open(SPREADSHEET_NAME)
     ls = sh.worksheet("andrei_mb")
     value = ls.cell(2, 2).value
-    return float(value) if value else 0.0
+    return decimal_value(value)
 
 
+@serialized_write
 def max_mb(act: str, amount: float):
-    gc = gspread.service_account(GOOGLE_SERVICE_ACCOUNT_FILE)
+    gc = client()
     sh = gc.open(SPREADSHEET_NAME)
     ls = sh.worksheet("andrei_mb")
     value = ls.cell(2, 2).value
-    current = float(value) if value else 0.0
+    current = decimal_value(value)
+    amount = decimal_value(amount)
     if act == "add_mmb":
         new_value = current + amount
     elif act == "sub_mmb":
         new_value = current - amount
     else:
         return False
-    ls.update_cell(2, 2, new_value)
+    ls.update_cell(2, 2, float(new_value))
     return True
 
 
 def get_sheet():
-    gc = gspread.service_account(GOOGLE_SERVICE_ACCOUNT_FILE)
+    gc = client()
     sh = gc.open(SPREADSHEET_NAME)
     return sh.sheet1
 
@@ -83,6 +122,7 @@ def get_category_row(sheet, category: str) -> int:
     return new_row_index
 
 
+@serialized_write
 def add_expense_matrix(category: str, amount: float, dt: datetime | None = None):
     if dt is None:
         dt = datetime.now()
@@ -96,14 +136,12 @@ def add_expense_matrix(category: str, amount: float, dt: datetime | None = None)
 
     # читаем текущее значение ячейки
     value = sheet.cell(row, col).value
-    try:
-        current = float(value) if value else 0.0
-    except ValueError:
-        current = 0.0  # если там мусор — начинаем с нуля
+    current = decimal_value(value)
 
-    new_value = current + amount
+    new_value = current + decimal_value(amount)
 
-    sheet.update_cell(row, col, new_value)
+    # Sheets accepts JSON numbers; all arithmetic before this boundary is Decimal.
+    sheet.update_cell(row, col, float(new_value))
 
 
 # ------------------------------------------------------
@@ -131,14 +169,14 @@ def get_month_totals(month_key: str):
     col_values = sheet.col_values(month_col)
 
     # Пропускаем первую строку (заголовки)
-    for i in range(1, len(col_values)):
+    for i in range(1, min(len(col_values), len(categories))):
         category = categories[i]
         value = col_values[i]
 
         try:
-            amount = float(value) if value else 0.0
-        except ValueError:
-            amount = 0.0
+            amount = decimal_value(value)
+        except (ValueError, ArithmeticError):
+            amount = Decimal("0")
 
         totals[category] = amount
 

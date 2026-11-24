@@ -1,5 +1,10 @@
 # main.py
+# systemctl --user status rich-family-bot
+# systemctl --user restart rich-family-bot
+# journalctl --user -u rich-family-bot -f
 import asyncio
+import logging
+from decimal import Decimal, InvalidOperation
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -21,26 +26,11 @@ from google_api import (
     max_mb,
 )
 from config import ALLOWED_USER_IDS, TOKEN
+from catalog import CATEGORIES
 
 # edited on GitHub for test pull git
 # PR: улучшен стартовый комментарий test5
 # test direct commit to master
-
-CATEGORIES = [
-    "Дом, телефон, интернет",
-    "Супермаркет",
-    "Школа Макс",
-    "Секции Макс",
-    "Страховка",
-    "Виза",
-    "Медицина",
-    "Машина/Байк",
-    "Бензин",
-    "Работа",
-    "Психолог",
-    "Миотерапевт",
-    "Разное",
-]
 
 MENUS = {
     "main": (
@@ -101,9 +91,7 @@ async def reply_or_edit(update, text, reply_markup=None):
         message = update.effective_message
         if message.text == text and message.reply_markup == reply_markup:
             return
-        await update.callback_query.edit_message_text(
-            text=text, reply_markup=reply_markup
-        )
+        await update.callback_query.edit_message_text(text=text, reply_markup=reply_markup)
     else:
         await update.effective_message.reply_text(text, reply_markup=reply_markup)
 
@@ -123,9 +111,7 @@ async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await update.callback_query.answer("Нет доступа", show_alert=True)
     elif update.effective_message:
-        await update.effective_message.reply_text(
-            f"Нет доступа. Ваш Telegram ID: {user_id}"
-        )
+        await update.effective_message.reply_text(f"Нет доступа. Ваш Telegram ID: {user_id}")
 
     # остальные обработчики не запускаем
     raise ApplicationHandlerStop
@@ -139,7 +125,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"Привет, {name}! Рад тебя видеть 👋\n"
-        "Я твой бот для учёта бюджета 🤑\n\nВыберите действие:",
+        "Я твой бот для учёта бюджета 🤑\n"
+        + (
+            "Можно отправить голосовое с расходами или изменением отдельного бюджета.\n"
+            if context.bot_data.get("voice")
+            else ""
+        )
+        + "\nВыберите действие:",
         reply_markup=menu_keyboard(),
     )
 
@@ -149,8 +141,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.update(mode="add", category=None)
 
     keyboard = [
-        [InlineKeyboardButton(cat, callback_data=f"expense:add:{cat}")]
-        for cat in CATEGORIES
+        [InlineKeyboardButton(cat, callback_data=f"expense:add:{cat}")] for cat in CATEGORIES
     ]
     keyboard.append([InlineKeyboardButton("← Назад", callback_data="menu:main")])
 
@@ -168,16 +159,14 @@ async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.update(mode="sub", category=None)
 
     keyboard = [
-        [InlineKeyboardButton(cat, callback_data=f"expense:sub:{cat}")]
-        for cat in CATEGORIES
+        [InlineKeyboardButton(cat, callback_data=f"expense:sub:{cat}")] for cat in CATEGORIES
     ]
     keyboard.append([InlineKeyboardButton("← Назад", callback_data="menu:main")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await reply_or_edit(
-        update,
-        "Выберите категорию, из которой хотите ОТНЯТЬ сумму:", reply_markup=reply_markup
+        update, "Выберите категорию, из которой хотите ОТНЯТЬ сумму:", reply_markup=reply_markup
     )
 
 
@@ -202,9 +191,7 @@ async def category_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode = context.user_data.get("mode")
         if mode not in ("add", "sub"):
             context.user_data.update(mode=None, category=None)
-            await reply_or_edit(
-                update, "Выберите действие в меню:", reply_markup=menu_keyboard()
-            )
+            await reply_or_edit(update, "Выберите действие в меню:", reply_markup=menu_keyboard())
             return
 
     if category not in CATEGORIES or mode not in ("add", "sub"):
@@ -231,11 +218,15 @@ async def add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Пытаемся преобразовать текст в число (разрешим дробные суммы)
     try:
-        amount = float(text)
-    except ValueError:
-        await update.message.reply_text(
-            "Пожалуйста, введи сумму числом, например 250 или 250.75"
-        )
+        amount = Decimal(text)
+        if (
+            not amount.is_finite()
+            or abs(amount) > Decimal("10000000")
+            or amount != amount.quantize(Decimal("0.01"))
+        ):
+            raise ValueError("Invalid amount")
+    except (ValueError, InvalidOperation):
+        await update.message.reply_text("Пожалуйста, введи сумму числом, например 250 или 250.75")
         return
 
     # Личный бюджет Андрея или Макса
@@ -248,7 +239,7 @@ async def add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update_budget, owner = andrei_mb, "Андрея"
             budget_menu = "andrei"
 
-        if update_budget(mode, abs(amount)):
+        if await asyncio.to_thread(update_budget, mode, abs(amount)):
             if mode in ("sub_amb", "sub_mmb"):
                 await update.message.reply_text(
                     f"Отнял {abs(amount)} из бюджета {owner} 👍",
@@ -279,7 +270,7 @@ async def add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = -amount
 
     # Запись в Google Sheets
-    add_expense_matrix(category, amount)
+    await asyncio.to_thread(add_expense_matrix, category, amount)
 
     if mode == "sub":
         await update.message.reply_text(
@@ -299,7 +290,7 @@ async def add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.update(mode=None, category=None)
     month_key = datetime.now().strftime("%Y-%m")
-    totals = get_month_totals(month_key)
+    totals = await asyncio.to_thread(get_month_totals, month_key)
 
     if not totals:
         await reply_or_edit(
@@ -340,7 +331,7 @@ async def andrei_but_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await reply_or_edit(
         update,
-        f"Бюджет Андрея: {andrei_but()} THB",
+        f"Бюджет Андрея: {await asyncio.to_thread(andrei_but)} THB",
         reply_markup=menu_keyboard("andrei"),
     )
 
@@ -370,7 +361,7 @@ async def max_but_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await reply_or_edit(
         update,
-        f"Бюджет Макса: {max_but()} THB",
+        f"Бюджет Макса: {await asyncio.to_thread(max_but)} THB",
         reply_markup=menu_keyboard("max"),
     )
 
@@ -382,9 +373,7 @@ async def menu_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action in MENUS:
         context.user_data.update(mode=None, category=None)
-        await reply_or_edit(
-            update, MENUS[action][0], reply_markup=menu_keyboard(action)
-        )
+        await reply_or_edit(update, MENUS[action][0], reply_markup=menu_keyboard(action))
         return
 
     commands = {
@@ -403,8 +392,24 @@ async def menu_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handler(update, context)
 
 
-# Главная функция, запускающая бота
-async def main():
+async def on_error(update, context):
+    logging.getLogger(__name__).error("bot_error code=%s", type(context.error).__name__)
+    if update and update.effective_message:
+        await update.effective_message.reply_text(
+            "Не удалось завершить действие. Если шла запись, проверьте таблицу перед повторным вводом.",
+            reply_markup=menu_keyboard(),
+        )
+
+
+async def voice_disabled(update, context):
+    text = "Голосовой ввод сейчас отключён. Используйте кнопки меню."
+    if update.callback_query:
+        await update.callback_query.answer(text, show_alert=True)
+    else:
+        await update.effective_message.reply_text(text, reply_markup=menu_keyboard())
+
+
+def build_application():
 
     # Создаём приложение (бота)
     app = Application.builder().token(TOKEN).build()
@@ -424,12 +429,45 @@ async def main():
     app.add_handler(CommandHandler("max_sub", max_sub_command))
     app.add_handler(CommandHandler("max_but", max_but_command))
 
+    from voice.settings import VoiceSettings
+
+    settings = VoiceSettings.from_env()
+    if settings.enabled:
+        from transactions import execute_operation
+        from voice.handler import VoiceController
+        from voice.providers import HermesBridge
+        from voice.store import PendingStore
+
+        bridge = HermesBridge(settings)
+        store = PendingStore(settings.data_dir / "voice.sqlite3", settings.ttl)
+        voice = VoiceController(
+            settings, store, bridge, bridge, execute_operation, ALLOWED_USER_IDS, menu_keyboard
+        )
+        voice.acquire_worker()
+        app.bot_data["voice"] = voice
+        logging.getLogger(__name__).info("Voice input enabled; durable confirmation store ready")
+        app.add_handler(MessageHandler(filters.VOICE, voice.receive, block=False))
+        app.add_handler(CallbackQueryHandler(voice.callback, pattern=r"^voice:"))
+    else:
+        app.add_handler(MessageHandler(filters.VOICE, voice_disabled))
+        app.add_handler(CallbackQueryHandler(voice_disabled, pattern=r"^voice:"))
+
     # кнопки
     app.add_handler(CallbackQueryHandler(menu_selected, pattern=r"^menu:"))
     app.add_handler(CallbackQueryHandler(category_chosen))
 
     # текст (сумма)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_amount))
+    app.add_error_handler(on_error)
+    return app
+
+
+# Главная функция, запускающая бота
+async def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    app = build_application()
 
     await app.initialize()
     await app.start()
