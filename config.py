@@ -12,8 +12,11 @@ DATA_DIR = Path(os.getenv("VOICE_DATA_DIR", str(BASE_DIR / "data")))
 # токен бота из BotFather
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 
-# имя таблицы в Google Sheets
-SPREADSHEET_NAME = os.environ["SPREADSHEET_NAME"]
+# ID однозначно выбирает таблицу; имя поддерживается для старых настроек.
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "").strip()
+SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME", "").strip()
+if not SPREADSHEET_ID and not SPREADSHEET_NAME:
+    raise ValueError("Set SPREADSHEET_ID or SPREADSHEET_NAME")
 
 # 🔑 Путь к JSON-файлу сервисного аккаунта Google
 GOOGLE_SERVICE_ACCOUNT_FILE = BASE_DIR / os.getenv(

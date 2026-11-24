@@ -5,6 +5,8 @@
 import asyncio
 import logging
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
+import traceback
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -16,7 +18,7 @@ from telegram.ext import (
     filters,
     TypeHandler,
 )
-from datetime import datetime
+from app_time import now as app_now
 from google_api import (
     add_expense_matrix,
     andrei_but,
@@ -26,11 +28,7 @@ from google_api import (
     max_mb,
 )
 from config import ALLOWED_USER_IDS, TOKEN
-from catalog import CATEGORIES
-
-# edited on GitHub for test pull git
-# PR: улучшен стартовый комментарий test5
-# test direct commit to master
+from catalog import CATEGORIES, CATEGORY_LABELS
 
 MENUS = {
     "main": (
@@ -141,7 +139,8 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.update(mode="add", category=None)
 
     keyboard = [
-        [InlineKeyboardButton(cat, callback_data=f"expense:add:{cat}")] for cat in CATEGORIES
+        [InlineKeyboardButton(label, callback_data=f"expense:add:{category_id}")]
+        for category_id, label in CATEGORY_LABELS.items()
     ]
     keyboard.append([InlineKeyboardButton("← Назад", callback_data="menu:main")])
 
@@ -159,7 +158,8 @@ async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.update(mode="sub", category=None)
 
     keyboard = [
-        [InlineKeyboardButton(cat, callback_data=f"expense:sub:{cat}")] for cat in CATEGORIES
+        [InlineKeyboardButton(label, callback_data=f"expense:sub:{category_id}")]
+        for category_id, label in CATEGORY_LABELS.items()
     ]
     keyboard.append([InlineKeyboardButton("← Назад", callback_data="menu:main")])
 
@@ -194,6 +194,8 @@ async def category_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await reply_or_edit(update, "Выберите действие в меню:", reply_markup=menu_keyboard())
             return
 
+    # Old messages contain the label; new messages contain the stable category ID.
+    category = CATEGORY_LABELS.get(category, category)
     if category not in CATEGORIES or mode not in ("add", "sub"):
         return
 
@@ -221,12 +223,15 @@ async def add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = Decimal(text)
         if (
             not amount.is_finite()
-            or abs(amount) > Decimal("10000000")
+            or not 0 < amount <= Decimal("10000000")
             or amount != amount.quantize(Decimal("0.01"))
         ):
             raise ValueError("Invalid amount")
     except (ValueError, InvalidOperation):
-        await update.message.reply_text("Пожалуйста, введи сумму числом, например 250 или 250.75")
+        await update.message.reply_text(
+            "Введите положительную сумму до 10 000 000 с максимум двумя знаками после запятой, "
+            "например 250 или 250.75."
+        )
         return
 
     # Личный бюджет Андрея или Макса
@@ -289,7 +294,7 @@ async def add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.update(mode=None, category=None)
-    month_key = datetime.now().strftime("%Y-%m")
+    month_key = app_now().strftime("%Y-%m")
     totals = await asyncio.to_thread(get_month_totals, month_key)
 
     if not totals:
@@ -392,13 +397,27 @@ async def menu_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handler(update, context)
 
 
+def log_safe_error(event, error):
+    # Only code locations, never exception text, source lines or local variables.
+    locations = " > ".join(
+        f"{Path(frame.filename).name}:{frame.lineno}:{frame.name}"
+        for frame in traceback.extract_tb(error.__traceback__, limit=-5)
+    )
+    logging.getLogger(__name__).error(
+        "%s code=%s at=%s", event, type(error).__name__, locations or "unknown"
+    )
+
+
 async def on_error(update, context):
-    logging.getLogger(__name__).error("bot_error code=%s", type(context.error).__name__)
+    log_safe_error("bot_error", context.error)
     if update and update.effective_message:
-        await update.effective_message.reply_text(
-            "Не удалось завершить действие. Если шла запись, проверьте таблицу перед повторным вводом.",
-            reply_markup=menu_keyboard(),
-        )
+        try:
+            await update.effective_message.reply_text(
+                "Не удалось завершить действие. Если шла запись, проверьте таблицу перед повторным вводом.",
+                reply_markup=menu_keyboard(),
+            )
+        except Exception as error:
+            log_safe_error("error_reply_failed", error)
 
 
 async def voice_disabled(update, context):

@@ -6,7 +6,9 @@ import tempfile
 _test_data = tempfile.TemporaryDirectory(prefix="accounting-tests-")
 os.environ.update(
     TELEGRAM_TOKEN="123456:offline_test_token",
+    SPREADSHEET_ID="",
     SPREADSHEET_NAME="offline-test-sheet",
+    APP_TIMEZONE="Asia/Bangkok",
     GOOGLE_SERVICE_ACCOUNT_FILE="/nonexistent/offline-test-credentials.json",
     ALLOWED_USER_IDS="42",
     VOICE_INPUT_ENABLED="false",

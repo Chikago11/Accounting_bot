@@ -4,7 +4,9 @@ from decimal import Decimal
 from functools import wraps
 import fcntl
 import threading
-from config import DATA_DIR, GOOGLE_SERVICE_ACCOUNT_FILE, SPREADSHEET_NAME
+from gspread.utils import ValueRenderOption
+from app_time import now as app_now
+from config import DATA_DIR, GOOGLE_SERVICE_ACCOUNT_FILE, SPREADSHEET_ID, SPREADSHEET_NAME
 
 _write_lock = threading.RLock()
 
@@ -36,20 +38,25 @@ def client():
     return gc
 
 
-def andrei_but():
+def open_spreadsheet():
     gc = client()
-    sh = gc.open(SPREADSHEET_NAME)
+    if SPREADSHEET_ID:
+        return gc.open_by_key(SPREADSHEET_ID)
+    return gc.open(SPREADSHEET_NAME)
+
+
+def andrei_but():
+    sh = open_spreadsheet()
     ls = sh.worksheet("andrei_mb")
-    value = ls.cell(1, 2).value
+    value = ls.cell(1, 2, value_render_option=ValueRenderOption.unformatted).value
     return decimal_value(value)
 
 
 @serialized_write
 def andrei_mb(act: str, amount: float):
-    gc = client()
-    sh = gc.open(SPREADSHEET_NAME)
+    sh = open_spreadsheet()
     ls = sh.worksheet("andrei_mb")
-    value = ls.cell(1, 2).value
+    value = ls.cell(1, 2, value_render_option=ValueRenderOption.unformatted).value
     current = decimal_value(value)
     amount = decimal_value(amount)
     if act == "add_amb":
@@ -63,19 +70,17 @@ def andrei_mb(act: str, amount: float):
 
 
 def max_but():
-    gc = client()
-    sh = gc.open(SPREADSHEET_NAME)
+    sh = open_spreadsheet()
     ls = sh.worksheet("andrei_mb")
-    value = ls.cell(2, 2).value
+    value = ls.cell(2, 2, value_render_option=ValueRenderOption.unformatted).value
     return decimal_value(value)
 
 
 @serialized_write
 def max_mb(act: str, amount: float):
-    gc = client()
-    sh = gc.open(SPREADSHEET_NAME)
+    sh = open_spreadsheet()
     ls = sh.worksheet("andrei_mb")
-    value = ls.cell(2, 2).value
+    value = ls.cell(2, 2, value_render_option=ValueRenderOption.unformatted).value
     current = decimal_value(value)
     amount = decimal_value(amount)
     if act == "add_mmb":
@@ -89,8 +94,7 @@ def max_mb(act: str, amount: float):
 
 
 def get_sheet():
-    gc = client()
-    sh = gc.open(SPREADSHEET_NAME)
+    sh = open_spreadsheet()
     return sh.sheet1
 
 
@@ -125,7 +129,7 @@ def get_category_row(sheet, category: str) -> int:
 @serialized_write
 def add_expense_matrix(category: str, amount: float, dt: datetime | None = None):
     if dt is None:
-        dt = datetime.now()
+        dt = app_now()
 
     month_key = dt.strftime("%Y-%m")  # например "2025-12"
 
@@ -135,7 +139,7 @@ def add_expense_matrix(category: str, amount: float, dt: datetime | None = None)
     col = get_month_col(sheet, month_key)
 
     # читаем текущее значение ячейки
-    value = sheet.cell(row, col).value
+    value = sheet.cell(row, col, value_render_option=ValueRenderOption.unformatted).value
     current = decimal_value(value)
 
     new_value = current + decimal_value(amount)
@@ -166,7 +170,7 @@ def get_month_totals(month_key: str):
 
     totals = {}
     # Читаем значения столбца
-    col_values = sheet.col_values(month_col)
+    col_values = sheet.col_values(month_col, value_render_option=ValueRenderOption.unformatted)
 
     # Пропускаем первую строку (заголовки)
     for i in range(1, min(len(col_values), len(categories))):

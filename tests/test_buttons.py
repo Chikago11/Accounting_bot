@@ -44,6 +44,29 @@ class ButtonsTests(unittest.IsolatedAsyncioTestCase):
                 await main.add_amount(self.update, self.context)
             write.assert_not_called()
 
+    async def test_nonpositive_amounts_rejected_in_all_button_modes(self):
+        with (
+            patch.object(main, "add_expense_matrix") as expense,
+            patch.object(main, "andrei_mb") as andrei,
+            patch.object(main, "max_mb") as max_budget,
+        ):
+            for mode in ("add", "sub", "add_amb", "sub_amb", "add_mmb", "sub_mmb"):
+                for text in ("-100", "0", "-0", "0.00"):
+                    with self.subTest(mode=mode, text=text):
+                        self.context.user_data.update(mode=mode, category="Бензин")
+                        self.message.text = text
+                        await main.add_amount(self.update, self.context)
+                        self.assertIn("положительную", self.message.reply_text.call_args.args[0])
+            expense.assert_not_called()
+            andrei.assert_not_called()
+            max_budget.assert_not_called()
+
+    async def test_positive_decimal_with_comma_still_works(self):
+        self.message.text = "0,25"
+        with patch.object(main, "add_expense_matrix") as write:
+            await main.add_amount(self.update, self.context)
+        write.assert_called_once_with("Супермаркет", Decimal("0.25"))
+
     async def test_report_reads_existing_totals(self):
         with patch.object(main, "get_month_totals", return_value={"Бензин": Decimal("500.50")}):
             await main.report(self.update, self.context)
@@ -59,6 +82,68 @@ class ButtonsTests(unittest.IsolatedAsyncioTestCase):
         self.message.reply_markup = None
         await main.category_chosen(self.update, self.context)
         self.assertEqual(self.context.user_data["category"], "Бензин")
+
+    async def test_new_keyboards_use_short_ids(self):
+        for handler, mode in ((main.add_command, "add"), (main.sub_command, "sub")):
+            await handler(self.update, self.context)
+            keyboard = self.message.reply_text.call_args.kwargs["reply_markup"]
+            for row, (key, label) in zip(keyboard.inline_keyboard, main.CATEGORY_LABELS.items()):
+                self.assertEqual(row[0].text, label)
+                self.assertEqual(row[0].callback_data, f"expense:{mode}:{key}")
+                self.assertLessEqual(len(row[0].callback_data.encode()), 64)
+
+    async def test_new_and_old_category_callbacks(self):
+        for data, mode in (
+            ("expense:add:fuel", "add"),
+            ("expense:sub:fuel", "sub"),
+            ("expense:add:Бензин", "add"),
+            ("expense:sub:Бензин", "sub"),
+        ):
+            with self.subTest(data=data):
+                self.update.callback_query = NS(
+                    data=data, answer=AsyncMock(), edit_message_text=AsyncMock()
+                )
+                self.message.reply_markup = None
+                self.context.user_data.update(mode=None, category=None)
+                await main.category_chosen(self.update, self.context)
+                self.assertEqual(self.context.user_data, {"mode": mode, "category": "Бензин"})
+
+    async def test_unknown_callback_category_is_rejected(self):
+        self.update.callback_query = NS(
+            data="expense:add:invented", answer=AsyncMock(), edit_message_text=AsyncMock()
+        )
+        self.context.user_data.update(mode=None, category=None)
+        await main.category_chosen(self.update, self.context)
+        self.assertIsNone(self.context.user_data["category"])
+        self.update.callback_query.edit_message_text.assert_not_awaited()
+
+    async def test_error_log_has_location_without_sensitive_content(self):
+        secret = "synthetic-secret-token and private financial text"
+
+        def fail():
+            raise RuntimeError(secret)
+
+        try:
+            fail()
+        except RuntimeError as error:
+            self.context.error = error
+        with self.assertLogs("main", level="ERROR") as logs:
+            await main.on_error(self.update, self.context)
+        text = "\n".join(logs.output)
+        self.assertIn("code=RuntimeError", text)
+        self.assertIn("test_buttons.py:", text)
+        self.assertIn(":fail", text)
+        self.assertNotIn(secret, text)
+        self.assertNotIn("raise RuntimeError(secret)", text)
+
+    async def test_failed_error_notification_does_not_escape_handler(self):
+        self.context.error = ValueError("private first error")
+        self.message.reply_text.side_effect = RuntimeError("private notification error")
+        with self.assertLogs("main", level="ERROR") as logs:
+            await main.on_error(self.update, self.context)
+        text = "\n".join(logs.output)
+        self.assertIn("error_reply_failed code=RuntimeError", text)
+        self.assertNotIn("private", text)
 
     async def test_voice_disabled_does_not_require_configuration(self):
         with patch.dict(

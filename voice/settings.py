@@ -1,9 +1,10 @@
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from app_time import timezone_name
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -12,7 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 class VoiceSettings:
     enabled: bool = False
     currency: str = "THB"
-    timezone: str = "Asia/Bangkok"
+    timezone: str = field(default_factory=timezone_name)
     max_duration: int = 120
     max_bytes: int = 10_000_000
     max_operations: int = 10
@@ -37,7 +38,6 @@ class VoiceSettings:
         value = cls(
             enabled=True,
             currency=os.getenv("VOICE_DEFAULT_CURRENCY", "THB"),
-            timezone=os.getenv("VOICE_TIMEZONE", "Asia/Bangkok"),
             max_duration=int(os.getenv("VOICE_MAX_DURATION_SECONDS", "120")),
             max_bytes=int(os.getenv("VOICE_MAX_FILE_BYTES", "10000000")),
             max_operations=int(os.getenv("VOICE_MAX_OPERATIONS", "10")),
