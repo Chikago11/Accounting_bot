@@ -12,7 +12,14 @@ from telegram.ext import (
     TypeHandler,
 )
 from datetime import datetime
-from google_api import add_expense_matrix, andrei_but, andrei_mb, get_month_totals
+from google_api import (
+    add_expense_matrix,
+    andrei_but,
+    andrei_mb,
+    get_month_totals,
+    max_but,
+    max_mb,
+)
 from config import ALLOWED_USER_IDS, TOKEN
 
 # edited on GitHub for test pull git
@@ -34,6 +41,71 @@ CATEGORIES = [
     "Миотерапевт",
     "Разное",
 ]
+
+MENUS = {
+    "main": (
+        "Выберите действие:",
+        [
+            ("Добавить расход", "add"),
+            ("Отменить расход", "sub"),
+            ("Отчет за месяц", "report"),
+            ("Отдельные бюджеты", "budgets"),
+        ],
+    ),
+    "budgets": (
+        "Отдельные бюджеты. Выберите бюджет:",
+        [
+            ("Бюджет Андрея", "andrei"),
+            ("Бюджет Макса", "max"),
+            ("← Назад", "main"),
+        ],
+    ),
+    "andrei": (
+        "Бюджет Андрея. Выберите действие:",
+        [
+            ("Добавить", "andrei_add"),
+            ("Вычесть", "andrei_sub"),
+            ("Показать", "andrei_but"),
+            ("← Назад", "budgets"),
+        ],
+    ),
+    "max": (
+        "Бюджет Макса. Выберите действие:",
+        [
+            ("Добавить", "max_add"),
+            ("Вычесть", "max_sub"),
+            ("Показать", "max_but"),
+            ("← Назад", "budgets"),
+        ],
+    ),
+}
+
+
+def menu_keyboard(menu="main"):
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(label, callback_data=f"menu:{action}")]
+            for label, action in MENUS[menu][1]
+        ]
+    )
+
+
+def back_keyboard(destination):
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("← Назад", callback_data=f"menu:{destination}")]]
+    )
+
+
+async def reply_or_edit(update, text, reply_markup=None):
+    if update.callback_query:
+        message = update.effective_message
+        if message.text == text and message.reply_markup == reply_markup:
+            return
+        await update.callback_query.edit_message_text(
+            text=text, reply_markup=reply_markup
+        )
+    else:
+        await update.effective_message.reply_text(text, reply_markup=reply_markup)
 
 
 # Пускаем к боту только тех, чьи ID есть в ALLOWED_USER_IDS в .env
@@ -63,21 +135,29 @@ async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user  # достаём объект пользователя
     name = user.first_name  # берём его имя (как в Телеграме)
+    context.user_data.update(mode=None, category=None)
 
     await update.message.reply_text(
-        f"Привет, {name}! Рад тебя видеть 👋\n" f"Я твой бот для учёта бюджета 🤑"
+        f"Привет, {name}! Рад тебя видеть 👋\n"
+        "Я твой бот для учёта бюджета 🤑\n\nВыберите действие:",
+        reply_markup=menu_keyboard(),
     )
 
 
 # функция отправки пользователю категорий для добавления расхода
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["mode"] = "add"  # режим добавления
+    context.user_data.update(mode="add", category=None)
 
-    keyboard = [[InlineKeyboardButton(cat, callback_data=cat)] for cat in CATEGORIES]
+    keyboard = [
+        [InlineKeyboardButton(cat, callback_data=f"expense:add:{cat}")]
+        for cat in CATEGORIES
+    ]
+    keyboard.append([InlineKeyboardButton("← Назад", callback_data="menu:main")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
+    await reply_or_edit(
+        update,
         "Выберите категорию, в которую хотите ДОБАВИТЬ расход:",
         reply_markup=reply_markup,
     )
@@ -85,13 +165,18 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # функция отправки пользователю категорий для удаления расхода
 async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["mode"] = "sub"  # режим вычитания
+    context.user_data.update(mode="sub", category=None)
 
-    keyboard = [[InlineKeyboardButton(cat, callback_data=cat)] for cat in CATEGORIES]
+    keyboard = [
+        [InlineKeyboardButton(cat, callback_data=f"expense:sub:{cat}")]
+        for cat in CATEGORIES
+    ]
+    keyboard.append([InlineKeyboardButton("← Назад", callback_data="menu:main")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
+    await reply_or_edit(
+        update,
         "Выберите категорию, из которой хотите ОТНЯТЬ сумму:", reply_markup=reply_markup
     )
 
@@ -104,20 +189,39 @@ async def category_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Обязательно отвечаем на callback, иначе у пользователя будет "крутиться часик"
     await query.answer()
 
-    # В callback_data мы положили название категории
-    category = query.data
+    # Действие хранится в кнопке, чтобы старые сообщения не путали режимы.
+    data = query.data or ""
+    if data.startswith("expense:"):
+        parts = data.split(":", 2)
+        if len(parts) != 3:
+            return
+        _, mode, category = parts
+    else:
+        # Поддержка кнопок категорий, отправленных до появления меню.
+        category = data
+        mode = context.user_data.get("mode")
+        if mode not in ("add", "sub"):
+            context.user_data.update(mode=None, category=None)
+            await reply_or_edit(
+                update, "Выберите действие в меню:", reply_markup=menu_keyboard()
+            )
+            return
+
+    if category not in CATEGORIES or mode not in ("add", "sub"):
+        return
 
     # Сохраняем выбранную категорию в user_data для этого пользователя
-    context.user_data["category"] = category
+    context.user_data.update(category=category, mode=mode)
 
-    mode = context.user_data.get("mode", "add")
     if mode == "sub":
         action_text = "которую хотите ОТНЯТЬ"
     else:
         action_text = "которую хотите ДОБАВИТЬ"
 
-    await query.edit_message_text(
-        text=f"Категория: {category}\nТеперь отправь сумму, {action_text}, например: 250"
+    await reply_or_edit(
+        update,
+        f"Категория: {category}\nТеперь отправь сумму, {action_text}, например: 250",
+        reply_markup=back_keyboard(mode),
     )
 
 
@@ -134,23 +238,29 @@ async def add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Режим "бюджет Андрея" (если пользователь вызвал /andrei_add или /andrei_sub)
+    # Личный бюджет Андрея или Макса
     mode = context.user_data.get("mode")
-    if mode in ("add_amb", "sub_amb"):
-        if mode == "sub_amb":
-            amount = -abs(amount)
+    if mode in ("add_amb", "sub_amb", "add_mmb", "sub_mmb"):
+        if mode in ("add_mmb", "sub_mmb"):
+            update_budget, owner = max_mb, "Макса"
+            budget_menu = "max"
+        else:
+            update_budget, owner = andrei_mb, "Андрея"
+            budget_menu = "andrei"
 
-        if andrei_mb(mode, abs(amount)):
-            if mode == "sub_amb":
+        if update_budget(mode, abs(amount)):
+            if mode in ("sub_amb", "sub_mmb"):
                 await update.message.reply_text(
-                    f"Отнял {abs(amount)} из бюджета Андрея 👍"
+                    f"Отнял {abs(amount)} из бюджета {owner} 👍",
+                    reply_markup=menu_keyboard(budget_menu),
                 )
             else:
                 await update.message.reply_text(
-                    f"Записал {abs(amount)} в бюджет Андрея 👍"
+                    f"Записал {abs(amount)} в бюджет {owner} 👍",
+                    reply_markup=menu_keyboard(budget_menu),
                 )
 
-        context.user_data["mode"] = None
+        context.user_data.update(mode=None, category=None)
         return
 
     # Берём выбранную категорию из user_data
@@ -159,7 +269,8 @@ async def add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Если категории нет — значит, пользователь ещё не нажимал кнопку
     if not category:
         await update.message.reply_text(
-            "Сначала выбери категорию через команду /add 🙂"
+            "Сначала выбери действие в меню или категорию через /add 🙂",
+            reply_markup=menu_keyboard(),
         )
         return
 
@@ -172,22 +283,28 @@ async def add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if mode == "sub":
         await update.message.reply_text(
-            f"Отнял {abs(amount)} из категории «{category}» 👍"
+            f"Отнял {abs(amount)} из категории «{category}» 👍",
+            reply_markup=menu_keyboard(),
         )
     else:
-        await update.message.reply_text(f"Записал {amount} в категорию «{category}» 👍")
+        await update.message.reply_text(
+            f"Записал {amount} в категорию «{category}» 👍",
+            reply_markup=menu_keyboard(),
+        )
 
     # сбрасываем категорию и режим
-    context.user_data["category"] = None
-    context.user_data["mode"] = "add"
+    context.user_data.update(mode=None, category=None)
 
 
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.update(mode=None, category=None)
     month_key = datetime.now().strftime("%Y-%m")
     totals = get_month_totals(month_key)
 
     if not totals:
-        await update.message.reply_text("За этот месяц пока нет данных 🙂")
+        await reply_or_edit(
+            update, "За этот месяц пока нет данных 🙂", reply_markup=menu_keyboard()
+        )
         return
 
     lines = [f"📊 Отчёт за {month_key}:\n"]
@@ -195,31 +312,95 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for category, amount in totals.items():
         lines.append(f"• {category}: {round(amount, 2)}")
 
-    await update.message.reply_text("\n".join(lines))
+    await reply_or_edit(update, "\n".join(lines), reply_markup=menu_keyboard())
 
 
 async def andrei_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.update(mode="add_amb", category=None)
 
-    await update.message.reply_text(
-        "Какую сумму добавить в бюджет Андрея, например: 250"
+    await reply_or_edit(
+        update,
+        "Какую сумму добавить в бюджет Андрея, например: 250",
+        reply_markup=back_keyboard("andrei"),
     )
-
-    context.user_data["mode"] = "add_amb"
 
 
 async def andrei_sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.update(mode="sub_amb", category=None)
 
-    await update.message.reply_text(
-        "Какую сумму отнять из бюджета Андрея, например: 250"
+    await reply_or_edit(
+        update,
+        "Какую сумму отнять из бюджета Андрея, например: 250",
+        reply_markup=back_keyboard("andrei"),
     )
 
-    context.user_data["mode"] = "sub_amb"
 
 async def andrei_but_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        
-    await update.message.reply_text(
-        f"Бюджет Андрея: {andrei_but()} THB"
-    )   
+    context.user_data.update(mode=None, category=None)
+
+    await reply_or_edit(
+        update,
+        f"Бюджет Андрея: {andrei_but()} THB",
+        reply_markup=menu_keyboard("andrei"),
+    )
+
+
+async def max_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.update(mode="add_mmb", category=None)
+
+    await reply_or_edit(
+        update,
+        "Какую сумму добавить в бюджет Макса, например: 250",
+        reply_markup=back_keyboard("max"),
+    )
+
+
+async def max_sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.update(mode="sub_mmb", category=None)
+
+    await reply_or_edit(
+        update,
+        "Какую сумму отнять из бюджета Макса, например: 250",
+        reply_markup=back_keyboard("max"),
+    )
+
+
+async def max_but_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.update(mode=None, category=None)
+
+    await reply_or_edit(
+        update,
+        f"Бюджет Макса: {max_but()} THB",
+        reply_markup=menu_keyboard("max"),
+    )
+
+
+async def menu_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    action = query.data.removeprefix("menu:")
+
+    if action in MENUS:
+        context.user_data.update(mode=None, category=None)
+        await reply_or_edit(
+            update, MENUS[action][0], reply_markup=menu_keyboard(action)
+        )
+        return
+
+    commands = {
+        "add": add_command,
+        "sub": sub_command,
+        "report": report,
+        "andrei_add": andrei_add_command,
+        "andrei_sub": andrei_sub_command,
+        "andrei_but": andrei_but_command,
+        "max_add": max_add_command,
+        "max_sub": max_sub_command,
+        "max_but": max_but_command,
+    }
+    handler = commands.get(action)
+    if handler:
+        await handler(update, context)
 
 
 # Главная функция, запускающая бота
@@ -239,8 +420,12 @@ async def main():
     app.add_handler(CommandHandler("andrei_sub", andrei_sub_command))
     app.add_handler(CommandHandler("report", report))
     app.add_handler(CommandHandler("andrei_but", andrei_but_command))
+    app.add_handler(CommandHandler("max_add", max_add_command))
+    app.add_handler(CommandHandler("max_sub", max_sub_command))
+    app.add_handler(CommandHandler("max_but", max_but_command))
 
     # кнопки
+    app.add_handler(CallbackQueryHandler(menu_selected, pattern=r"^menu:"))
     app.add_handler(CallbackQueryHandler(category_chosen))
 
     # текст (сумма)

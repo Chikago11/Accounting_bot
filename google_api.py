@@ -25,6 +25,30 @@ def andrei_mb(act: str, amount: float):
     return True
 
 
+def max_but():
+    gc = gspread.service_account(GOOGLE_SERVICE_ACCOUNT_FILE)
+    sh = gc.open(SPREADSHEET_NAME)
+    ls = sh.worksheet("andrei_mb")
+    value = ls.cell(2, 2).value
+    return float(value) if value else 0.0
+
+
+def max_mb(act: str, amount: float):
+    gc = gspread.service_account(GOOGLE_SERVICE_ACCOUNT_FILE)
+    sh = gc.open(SPREADSHEET_NAME)
+    ls = sh.worksheet("andrei_mb")
+    value = ls.cell(2, 2).value
+    current = float(value) if value else 0.0
+    if act == "add_mmb":
+        new_value = current + amount
+    elif act == "sub_mmb":
+        new_value = current - amount
+    else:
+        return False
+    ls.update_cell(2, 2, new_value)
+    return True
+
+
 def get_sheet():
     gc = gspread.service_account(GOOGLE_SERVICE_ACCOUNT_FILE)
     sh = gc.open(SPREADSHEET_NAME)
