@@ -5,22 +5,44 @@ import logging
 import time
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from catalog import ACTION_LABELS, CATEGORY_LABELS
+from catalog import ACTION_LABELS, CATEGORY_LABELS, WRITE_ACTIONS, READ_ACTIONS
 
-from .models import parse_result
+from .models import parse_result, validate_operations
 from .service import VoiceService
 
 log = logging.getLogger(__name__)
 
 
 class VoiceController:
-    def __init__(self, settings, store, stt, parser, execute, allowed_users, menu_factory):
+    def __init__(
+        self,
+        settings,
+        store,
+        stt,
+        parser,
+        execute,
+        allowed_users,
+        menu_factory,
+        command_handler=None,
+    ):
         self.settings, self.store = settings, store
         self.stt, self.parser = stt, parser
         self.allowed_users, self.menu_factory = allowed_users, menu_factory
         self.service = VoiceService(store, settings, execute)
         self.busy = asyncio.Lock()
         self.worker_lock = None
+        self.command_handler = command_handler
+
+    @staticmethod
+    def dialog_state(context):
+        return {key: context.user_data.get(key) for key in ("mode", "category", "menu")}
+
+    async def run_commands(self, operations, update, context):
+        for operation in operations:
+            if not operation.is_write:
+                if self.command_handler is None:
+                    raise RuntimeError("Voice menu handler is not configured")
+                await self.command_handler(operation, update, context)
 
     def acquire_worker(self):
         self.worker_lock = (self.settings.data_dir / "voice-worker.lock").open("a")
@@ -59,11 +81,11 @@ class VoiceController:
             batch, fresh = self.store.reserve(source, update.effective_user.id, message.chat_id)
             if not fresh:
                 await message.reply_text(
-                    "Это голосовое уже принято. Используйте подтверждение под предыдущим результатом или отправьте новое сообщение."
+                    "Это голосовое уже принято. Смотрите предыдущий ответ или отправьте новую команду."
                 )
                 return
             key = batch["id"]
-            context.user_data.update(mode=None, category=None)
+            dialog = self.dialog_state(context)
             stage = "download"
             started = time.monotonic()
             try:
@@ -86,7 +108,7 @@ class VoiceController:
                 log.info("voice stage=stt batch=%s elapsed=%.2f", key, time.monotonic() - started)
                 stage = "parse"
                 parsing_started = time.monotonic()
-                result = await self.parser.parse(transcript)
+                result = await self.parser.parse(transcript, dialog=dialog)
                 operations, clarification = parse_result(result, self.settings)
                 log.info(
                     "voice stage=parse batch=%s elapsed=%.2f count=%s",
@@ -101,14 +123,37 @@ class VoiceController:
                         reply_markup=self.menu_factory(),
                     )
                     return
+                if self.dialog_state(context) != dialog:
+                    self.store.finish(key, "cancelled")
+                    await message.reply_text(
+                        "Пока распознавалось голосовое, действие в меню изменилось. Повторите команду."
+                    )
+                    return
                 self.store.pending(key, transcript, operations)
                 # Keep each Telegram message within its 4096-character limit.
                 for start in range(0, len(transcript), 3500):
                     await message.reply_text("Распознано:\n" + transcript[start : start + 3500])
+                if not any(op.is_write for op in operations):
+                    stage = "command"
+                    if self.store.claim(key, update.effective_user.id, message.chat_id):
+                        await self.run_commands(operations, update, context)
+                        self.store.finish(key, "completed")
+                    return
+                last_write = next(op for op in reversed(operations) if op.is_write)
+                destination = (
+                    "andrei"
+                    if last_write.action.startswith("andrei_")
+                    else "max"
+                    if last_write.action.startswith("max_")
+                    else "main"
+                )
+                context.user_data.update(mode=None, category=None, menu=destination)
                 text = "Проверьте операции:\n\n" + "\n".join(
                     f"{i}. {op.describe()}" for i, op in enumerate(operations, 1)
                 )
                 text += f"\n\nПодтверждение действует {self.settings.ttl // 60} мин."
+                if any(not op.is_write for op in operations):
+                    text += "\nОтчёты и остатки покажу после записи."
                 await message.reply_text(
                     text,
                     reply_markup=InlineKeyboardMarkup(
@@ -142,7 +187,8 @@ class VoiceController:
                 errors = {
                     "download": "Не удалось скачать голосовое. Попробуйте отправить его ещё раз.",
                     "stt": "Не удалось распознать речь. Попробуйте короткое голосовое с чёткой суммой.",
-                    "parse": "Не удалось однозначно разобрать операции. Повторите сообщение с категорией и суммой или используйте кнопки.",
+                    "parse": "Не удалось однозначно разобрать команду. Повторите её или используйте кнопки меню.",
+                    "command": "Не удалось получить данные или открыть меню. Попробуйте ещё раз или используйте кнопки.",
                 }
                 await message.reply_text(errors[stage], reply_markup=self.menu_factory())
 
@@ -163,6 +209,8 @@ class VoiceController:
         items = json.loads(batch["operations"])
         lines = ["Результат записи:"]
         for position, item in enumerate(items):
+            if item["action"] not in WRITE_ACTIONS:
+                continue
             state = attempts.get(position)
             label = (
                 "✅ Записано"
@@ -208,7 +256,7 @@ class VoiceController:
         else:
             changed = self.store.cancel(key, user_id, chat_id)
             if changed and action == "edit":
-                context.user_data.update(mode=None, category=None)
+                context.user_data.update(mode=None, category=None, menu="main")
                 await query.edit_message_text(
                     "Пакет отменён. Внесите исправленные операции через меню или отправьте новое голосовое.",
                     reply_markup=self.menu_factory(),
@@ -232,3 +280,24 @@ class VoiceController:
                 else None
             )
             await query.edit_message_text(text, reply_markup=markup)
+        if action == "confirm" and batch and batch["status"] == "completed":
+            queries = [
+                item for item in json.loads(batch["operations"]) if item["action"] in READ_ACTIONS
+            ]
+            if not queries:
+                return
+            # Personal balances always mean the current balance, including a repeated callback.
+            queries = [
+                item | {"occurred_at": None} if item["action"] != "report" else item
+                for item in queries
+            ]
+            try:
+                operations = validate_operations(queries, self.settings, stored=True)
+                await self.run_commands(operations, update, context)
+            except Exception as error:
+                log.warning(
+                    "voice stage=read_after_write batch=%s error=%s", key, type(error).__name__
+                )
+                await update.effective_message.reply_text(
+                    "Операции записаны. Не удалось получить отчёт или остаток — запросите его отдельной командой."
+                )

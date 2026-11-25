@@ -107,7 +107,9 @@ class ButtonsTests(unittest.IsolatedAsyncioTestCase):
                 self.message.reply_markup = None
                 self.context.user_data.update(mode=None, category=None)
                 await main.category_chosen(self.update, self.context)
-                self.assertEqual(self.context.user_data, {"mode": mode, "category": "Бензин"})
+                self.assertEqual(
+                    self.context.user_data, {"mode": mode, "category": "Бензин", "menu": "main"}
+                )
 
     async def test_unknown_callback_category_is_rejected(self):
         self.update.callback_query = NS(

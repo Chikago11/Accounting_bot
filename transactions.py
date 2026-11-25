@@ -7,6 +7,8 @@ import google_api
 
 
 def execute_operation(operation):
+    if not operation.is_write:
+        raise ValueError("Only financial writes belong in the transaction service")
     if operation.action.startswith("expense_"):
         amount = operation.amount if operation.action == "expense_add" else -operation.amount
         google_api.add_expense_matrix(

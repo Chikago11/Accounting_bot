@@ -24,6 +24,8 @@ class VoiceService:
         if not self.store.claim(key, user_id, chat_id):
             return self.store.get(key, user_id, chat_id)
         for position, operation in enumerate(operations):
+            if not operation.is_write:
+                continue
             started = False
             try:
                 # Persist BEFORE making the request. A crash leaves an uncertain attempt.

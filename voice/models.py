@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
-from catalog import ACTION_LABELS, CATEGORY_LABELS
+from catalog import ACTION_LABELS, CATEGORY_LABELS, NAVIGATION_ACTIONS, WRITE_ACTIONS
 
 
 class ValidationError(ValueError):
@@ -14,16 +14,23 @@ class ValidationError(ValueError):
 @dataclass(frozen=True)
 class Operation:
     action: str
-    amount: Decimal
+    amount: Decimal | None
     currency: str
     category_id: str | None
     occurred_at: str
 
     def to_dict(self):
-        return {**self.__dict__, "amount": str(self.amount)}
+        return {**self.__dict__, "amount": str(self.amount) if self.amount is not None else None}
+
+    @property
+    def is_write(self):
+        return self.action in WRITE_ACTIONS
 
     def describe(self):
         category = f" — {CATEGORY_LABELS[self.category_id]}" if self.category_id else ""
+        if not self.is_write:
+            period = f" ({self.occurred_at[:7]})" if self.action == "report" else ""
+            return f"{ACTION_LABELS[self.action]}{category}{period}"
         return f"{ACTION_LABELS[self.action]}{category} — {self.amount:,.2f} {self.currency} ({self.occurred_at})"
 
 
@@ -69,26 +76,34 @@ def validate_operations(items, settings, now=None, stored=False):
         action, category = item["action"], item["category_id"]
         if not isinstance(action, str) or action not in ACTION_LABELS:
             raise ValidationError("Unknown action")
-        if action.startswith("expense_"):
+        if action in ("expense_add", "expense_sub"):
             if not isinstance(category, str) or category not in CATEGORY_LABELS:
                 raise ValidationError("Unknown category")
-        elif category is not None:
-            raise ValidationError("Budgets do not have categories")
-        amount = item["amount"]
-        if isinstance(amount, bool) or not isinstance(
-            amount, (int, Decimal, str) if stored else (int, Decimal)
-        ):
-            raise ValidationError("Amount must be numeric")
-        try:
-            amount = Decimal(amount)
-            if (
-                not amount.is_finite()
-                or not 0 < amount <= settings.max_amount
-                or amount != amount.quantize(Decimal("0.01"))
+        elif action in ("expense_add_prompt", "expense_sub_prompt"):
+            if category is not None and (
+                not isinstance(category, str) or category not in CATEGORY_LABELS
             ):
-                raise ValidationError("Invalid amount")
-        except (InvalidOperation, ValueError) as error:
-            raise ValidationError("Invalid amount") from error
+                raise ValidationError("Unknown category")
+        elif category is not None:
+            raise ValidationError("This action does not have a category")
+        amount = item["amount"]
+        if action in WRITE_ACTIONS:
+            if isinstance(amount, bool) or not isinstance(
+                amount, (int, Decimal, str) if stored else (int, Decimal)
+            ):
+                raise ValidationError("Amount must be numeric")
+            try:
+                amount = Decimal(amount)
+                if (
+                    not amount.is_finite()
+                    or not 0 < amount <= settings.max_amount
+                    or amount != amount.quantize(Decimal("0.01"))
+                ):
+                    raise ValidationError("Invalid amount")
+            except (InvalidOperation, ValueError) as error:
+                raise ValidationError("Invalid amount") from error
+        elif amount is not None:
+            raise ValidationError("Read and menu commands must have amount=null")
         if item["currency"] != settings.currency:
             raise ValidationError("Unsupported currency")
         raw_date = item["occurred_at"]
@@ -105,9 +120,11 @@ def validate_operations(items, settings, now=None, stored=False):
         if not today - timedelta(days=366) <= date <= today:
             raise ValidationError("Date outside supported range")
         # Personal budgets store a current balance, not a historical ledger.
-        if not action.startswith("expense_") and date != today:
-            raise ValidationError("Historical personal budget operations are not supported")
+        if action not in ("expense_add", "expense_sub", "report") and date != today:
+            raise ValidationError("Historical dates are supported only for expenses and reports")
         operations.append(Operation(action, amount, settings.currency, category, date.isoformat()))
+    if len(operations) > 1 and any(op.action in NAVIGATION_ACTIONS for op in operations):
+        raise ValidationError("A menu/prompt command must be sent separately")
     return operations
 
 

@@ -28,7 +28,7 @@ from google_api import (
     max_mb,
 )
 from config import ALLOWED_USER_IDS, TOKEN
-from catalog import CATEGORIES, CATEGORY_LABELS
+from catalog import CATEGORIES, CATEGORY_LABELS, VOICE_MENU_ACTIONS, READ_ACTIONS
 from errors import SheetLayoutError
 
 MENUS = {
@@ -85,8 +85,8 @@ def back_keyboard(destination):
     )
 
 
-async def reply_or_edit(update, text, reply_markup=None):
-    if update.callback_query:
+async def reply_or_edit(update, text, reply_markup=None, *, new_message=False):
+    if update.callback_query and not new_message:
         message = update.effective_message
         if message.text == text and message.reply_markup == reply_markup:
             return
@@ -120,13 +120,13 @@ async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user  # достаём объект пользователя
     name = user.first_name  # берём его имя (как в Телеграме)
-    context.user_data.update(mode=None, category=None)
+    context.user_data.update(mode=None, category=None, menu="main")
 
     await update.message.reply_text(
         f"Привет, {name}! Рад тебя видеть 👋\n"
         "Я твой бот для учёта бюджета 🤑\n"
         + (
-            "Можно отправить голосовое с расходами или изменением отдельного бюджета.\n"
+            "Голосом можно управлять расходами и бюджетами, смотреть остатки и отчёты, открывать меню.\n"
             if context.bot_data.get("voice")
             else ""
         )
@@ -137,7 +137,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # функция отправки пользователю категорий для добавления расхода
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.update(mode="add", category=None)
+    context.user_data.update(mode="add", category=None, menu="main")
 
     keyboard = [
         [InlineKeyboardButton(label, callback_data=f"expense:add:{category_id}")]
@@ -156,7 +156,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # функция отправки пользователю категорий для удаления расхода
 async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.update(mode="sub", category=None)
+    context.user_data.update(mode="sub", category=None, menu="main")
 
     keyboard = [
         [InlineKeyboardButton(label, callback_data=f"expense:sub:{category_id}")]
@@ -200,8 +200,11 @@ async def category_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if category not in CATEGORIES or mode not in ("add", "sub"):
         return
 
-    # Сохраняем выбранную категорию в user_data для этого пользователя
-    context.user_data.update(category=category, mode=mode)
+    await prompt_expense_amount(update, context, mode, category)
+
+
+async def prompt_expense_amount(update, context, mode, category):
+    context.user_data.update(category=category, mode=mode, menu="main")
 
     if mode == "sub":
         action_text = "которую хотите ОТНЯТЬ"
@@ -293,14 +296,19 @@ async def add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.update(mode=None, category=None)
 
 
-async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.update(mode=None, category=None)
-    month_key = app_now().strftime("%Y-%m")
+async def report(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, month_key=None, *, new_message=False
+):
+    context.user_data.update(mode=None, category=None, menu="main")
+    month_key = month_key or app_now().strftime("%Y-%m")
     totals = await asyncio.to_thread(get_month_totals, month_key)
 
     if not totals:
         await reply_or_edit(
-            update, "За этот месяц пока нет данных 🙂", reply_markup=menu_keyboard()
+            update,
+            f"За {month_key} пока нет данных 🙂",
+            reply_markup=menu_keyboard(),
+            new_message=new_message,
         )
         return
 
@@ -309,11 +317,13 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for category, amount in totals.items():
         lines.append(f"• {category}: {round(amount, 2)}")
 
-    await reply_or_edit(update, "\n".join(lines), reply_markup=menu_keyboard())
+    await reply_or_edit(
+        update, "\n".join(lines), reply_markup=menu_keyboard(), new_message=new_message
+    )
 
 
 async def andrei_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.update(mode="add_amb", category=None)
+    context.user_data.update(mode="add_amb", category=None, menu="andrei")
 
     await reply_or_edit(
         update,
@@ -323,7 +333,7 @@ async def andrei_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def andrei_sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.update(mode="sub_amb", category=None)
+    context.user_data.update(mode="sub_amb", category=None, menu="andrei")
 
     await reply_or_edit(
         update,
@@ -332,18 +342,21 @@ async def andrei_sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 
-async def andrei_but_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.update(mode=None, category=None)
+async def andrei_but_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, *, new_message=False
+):
+    context.user_data.update(mode=None, category=None, menu="andrei")
 
     await reply_or_edit(
         update,
         f"Бюджет Андрея: {await asyncio.to_thread(andrei_but)} THB",
         reply_markup=menu_keyboard("andrei"),
+        new_message=new_message,
     )
 
 
 async def max_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.update(mode="add_mmb", category=None)
+    context.user_data.update(mode="add_mmb", category=None, menu="max")
 
     await reply_or_edit(
         update,
@@ -353,7 +366,7 @@ async def max_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def max_sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.update(mode="sub_mmb", category=None)
+    context.user_data.update(mode="sub_mmb", category=None, menu="max")
 
     await reply_or_edit(
         update,
@@ -362,13 +375,14 @@ async def max_sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def max_but_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.update(mode=None, category=None)
+async def max_but_command(update: Update, context: ContextTypes.DEFAULT_TYPE, *, new_message=False):
+    context.user_data.update(mode=None, category=None, menu="max")
 
     await reply_or_edit(
         update,
         f"Бюджет Макса: {await asyncio.to_thread(max_but)} THB",
         reply_markup=menu_keyboard("max"),
+        new_message=new_message,
     )
 
 
@@ -376,9 +390,12 @@ async def menu_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     action = query.data.removeprefix("menu:")
+    await run_menu_action(action, update, context)
 
+
+async def run_menu_action(action, update, context):
     if action in MENUS:
-        context.user_data.update(mode=None, category=None)
+        context.user_data.update(mode=None, category=None, menu=action)
         await reply_or_edit(update, MENUS[action][0], reply_markup=menu_keyboard(action))
         return
 
@@ -396,6 +413,27 @@ async def menu_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     handler = commands.get(action)
     if handler:
         await handler(update, context)
+
+
+async def run_voice_command(operation, update, context):
+    """Voice uses the same menu/read handlers as Telegram buttons."""
+    action = operation.action
+    if action in READ_ACTIONS:
+        if action == "report":
+            await report(update, context, operation.occurred_at[:7], new_message=True)
+        elif action == "andrei_show":
+            await andrei_but_command(update, context, new_message=True)
+        else:
+            await max_but_command(update, context, new_message=True)
+    elif action in ("expense_add_prompt", "expense_sub_prompt") and operation.category_id:
+        await prompt_expense_amount(
+            update,
+            context,
+            "add" if action == "expense_add_prompt" else "sub",
+            CATEGORY_LABELS[operation.category_id],
+        )
+    else:
+        await run_menu_action(VOICE_MENU_ACTIONS[action], update, context)
 
 
 def log_safe_error(event, error):
@@ -463,7 +501,14 @@ def build_application():
         bridge = HermesBridge(settings)
         store = PendingStore(settings.data_dir / "voice.sqlite3", settings.ttl)
         voice = VoiceController(
-            settings, store, bridge, bridge, execute_operation, ALLOWED_USER_IDS, menu_keyboard
+            settings,
+            store,
+            bridge,
+            bridge,
+            execute_operation,
+            ALLOWED_USER_IDS,
+            menu_keyboard,
+            command_handler=run_voice_command,
         )
         voice.acquire_worker()
         app.bot_data["voice"] = voice
