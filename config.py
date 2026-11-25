@@ -2,11 +2,13 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from app_time import validate_timezone
 
 BASE_DIR = Path(__file__).resolve().parent
 
 # все настройки и секреты лежат в .env (он не попадает в git)
 load_dotenv(BASE_DIR / ".env")
+validate_timezone()
 DATA_DIR = Path(os.getenv("VOICE_DATA_DIR", str(BASE_DIR / "data")))
 
 # токен бота из BotFather

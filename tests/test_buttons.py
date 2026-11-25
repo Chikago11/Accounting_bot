@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import main
 import google_api
+from errors import SheetLayoutError
 from transactions import execute_operation
 from voice.models import Operation
 
@@ -144,6 +145,16 @@ class ButtonsTests(unittest.IsolatedAsyncioTestCase):
         text = "\n".join(logs.output)
         self.assertIn("error_reply_failed code=RuntimeError", text)
         self.assertNotIn("private", text)
+
+    async def test_missing_category_has_actionable_error(self):
+        self.context.error = SheetLayoutError(
+            "Категория отсутствует в таблице. Добавьте её перед «Итого»."
+        )
+        with self.assertLogs("main", level="ERROR"):
+            await main.on_error(self.update, self.context)
+        text = self.message.reply_text.call_args.args[0]
+        self.assertIn("Операция не записана", text)
+        self.assertIn("перед «Итого»", text)
 
     async def test_voice_disabled_does_not_require_configuration(self):
         with patch.dict(

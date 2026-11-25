@@ -19,6 +19,7 @@ from voice.providers import HermesBridge, ProviderError
 from voice.service import VoiceService
 from voice.settings import VoiceSettings
 from voice.store import PendingStore
+from errors import SheetLayoutError
 
 
 def item(**changes):
@@ -241,6 +242,15 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(service.confirm(key, 42, 10)["status"], "completed")
         self.assertEqual(len(self.calls), 1)
 
+    def test_missing_sheet_category_is_rejected_not_uncertain(self):
+        key = self.batch([item(), item(amount=2)])
+        execute = Mock(side_effect=SheetLayoutError("Категория отсутствует в таблице."))
+        service = VoiceService(self.store, self.settings, execute)
+        self.assertEqual(service.confirm(key, 42, 10)["status"], "failed")
+        service.confirm(key, 42, 10)
+        execute.assert_called_once()
+        self.assertEqual(self.store.attempts(key), {0: "rejected"})
+
 
 class FlowTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -294,6 +304,19 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.callback(self.update, self.context)
         self.assertEqual(self.store.get(key, 42, 10)["status"], "cancelled")
         self.execute.assert_not_called()
+
+    async def test_layout_error_is_explained_in_confirmation_result(self):
+        await self.controller.receive(self.update, self.context)
+        self.execute.side_effect = SheetLayoutError("Категория отсутствует в таблице.")
+        key = self.key()
+        self.update.callback_query = NS(
+            data=f"voice:confirm:{key}", answer=AsyncMock(), edit_message_text=AsyncMock()
+        )
+        await self.controller.callback(self.update, self.context)
+        text = self.update.callback_query.edit_message_text.call_args.args[0]
+        self.assertIn("Не записано", text)
+        self.assertIn("перед «Итого»", text)
+        self.assertNotIn("Результат неизвестен", text)
 
     async def test_duplicate_delivery_does_not_reparse(self):
         await self.controller.receive(self.update, self.context)

@@ -29,6 +29,7 @@ from google_api import (
 )
 from config import ALLOWED_USER_IDS, TOKEN
 from catalog import CATEGORIES, CATEGORY_LABELS
+from errors import SheetLayoutError
 
 MENUS = {
     "main": (
@@ -413,7 +414,9 @@ async def on_error(update, context):
     if update and update.effective_message:
         try:
             await update.effective_message.reply_text(
-                "Не удалось завершить действие. Если шла запись, проверьте таблицу перед повторным вводом.",
+                f"Операция не записана. {context.error}"
+                if isinstance(context.error, SheetLayoutError)
+                else "Не удалось завершить действие. Если шла запись, проверьте таблицу перед повторным вводом.",
                 reply_markup=menu_keyboard(),
             )
         except Exception as error:
@@ -504,5 +507,12 @@ async def main():
         await app.shutdown()
 
 
+def run():
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    run()

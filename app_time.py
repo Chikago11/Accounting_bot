@@ -2,7 +2,7 @@
 
 from datetime import datetime
 import os
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 def timezone_name():
@@ -12,3 +12,12 @@ def timezone_name():
 
 def now():
     return datetime.now(ZoneInfo(timezone_name()))
+
+
+def validate_timezone():
+    try:
+        ZoneInfo(timezone_name())
+    except (ZoneInfoNotFoundError, ValueError) as error:
+        raise ValueError(
+            "Invalid APP_TIMEZONE/VOICE_TIMEZONE; use an IANA name such as Asia/Bangkok"
+        ) from error

@@ -4,9 +4,10 @@ from decimal import Decimal
 from functools import wraps
 import fcntl
 import threading
-from gspread.utils import ValueRenderOption
+from gspread.utils import ValueRenderOption, rowcol_to_a1
 from app_time import now as app_now
 from config import DATA_DIR, GOOGLE_SERVICE_ACCOUNT_FILE, SPREADSHEET_ID, SPREADSHEET_NAME
+from errors import SheetLayoutError
 
 _write_lock = threading.RLock()
 
@@ -98,6 +99,17 @@ def get_sheet():
     return sh.sheet1
 
 
+def total_row(labels):
+    matches = [
+        i
+        for i, label in enumerate(labels, 1)
+        if isinstance(label, str) and label.strip().casefold() == "итого"
+    ]
+    if len(matches) > 1 or (matches and matches[0] < 3):
+        raise SheetLayoutError("В таблице должна быть одна строка «Итого» после категорий.")
+    return matches[0] if matches else None
+
+
 def get_month_col(sheet, month_key: str) -> int:
     # month_key, например "2025-12"
     header = sheet.row_values(1)  # заголовки первой строки
@@ -107,23 +119,79 @@ def get_month_col(sheet, month_key: str) -> int:
         if value == month_key:
             return idx
 
-    # если не нашли — добавляем новый столбец в конец
+    # Create the header and total in one batch, keeping existing months unchanged.
+    if not header:
+        raise SheetLayoutError(
+            "В первой строке таблицы нет заголовков. Проверьте её перед добавлением месяца."
+        )
+    end_row = total_row(sheet.col_values(1))
+    if end_row is None:
+        raise SheetLayoutError("В таблице нет строки «Итого». Добавьте её после категорий.")
     new_col_index = len(header) + 1
-    sheet.update_cell(1, new_col_index, month_key)
+    existing = (
+        sheet.col_values(new_col_index, value_render_option=ValueRenderOption.formula)
+        if new_col_index <= sheet.col_count
+        else []
+    )
+    if any(value not in (None, "") for i, value in enumerate(existing, 1) if i != end_row):
+        raise SheetLayoutError(
+            "Столбец для нового месяца уже содержит данные. Проверьте заголовки таблицы."
+        )
+    previous_total = existing[end_row - 1] if len(existing) >= end_row else None
+    if previous_total not in (None, "") and not (
+        isinstance(previous_total, str) and previous_total.startswith("=")
+    ):
+        raise SheetLayoutError(
+            "В «Итого» нового месяца уже записано значение. Проверьте эту ячейку."
+        )
+
+    cells = [(1, {"stringValue": month_key})]
+    if previous_total in (None, ""):
+        start = rowcol_to_a1(2, new_col_index)
+        end = rowcol_to_a1(end_row - 1, new_col_index)
+        cells.append((end_row, {"formulaValue": f"=SUM({start}:{end})"}))
+    requests = [
+        {
+            "updateCells": {
+                "start": {
+                    "sheetId": sheet.id,
+                    "rowIndex": row - 1,
+                    "columnIndex": new_col_index - 1,
+                },
+                "rows": [{"values": [{"userEnteredValue": value}]}],
+                "fields": "userEnteredValue",
+            }
+        }
+        for row, value in cells
+    ]
+    if new_col_index > sheet.col_count:
+        requests.insert(
+            0,
+            {
+                "appendDimension": {
+                    "sheetId": sheet.id,
+                    "dimension": "COLUMNS",
+                    "length": new_col_index - sheet.col_count,
+                }
+            },
+        )
+    sheet.spreadsheet.batch_update({"requests": requests})
     return new_col_index
 
 
 def get_category_row(sheet, category: str) -> int:
     column = sheet.col_values(1)  # весь столбец A
-
-    for idx, value in enumerate(column, start=1):
-        if value == category:
-            return idx
-
-    # если категории нет — добавляем новую строку в конец
-    new_row_index = len(column) + 1
-    sheet.update_cell(new_row_index, 1, category)
-    return new_row_index
+    rows = [idx for idx, value in enumerate(column, 1) if value == category]
+    if not rows:
+        raise SheetLayoutError(
+            "Категория отсутствует в таблице. Добавьте её перед строкой «Итого» и проверьте формулы суммы."
+        )
+    if len(rows) != 1:
+        raise SheetLayoutError("Категория повторяется в таблице. Оставьте для неё одну строку.")
+    end_row = total_row(column)
+    if rows[0] < 2 or (end_row is not None and rows[0] >= end_row):
+        raise SheetLayoutError("Категория должна находиться между заголовком и строкой «Итого».")
+    return rows[0]
 
 
 @serialized_write

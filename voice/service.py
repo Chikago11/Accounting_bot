@@ -1,5 +1,6 @@
 import json
 import logging
+from errors import SheetLayoutError
 
 from .models import validate_operations
 
@@ -38,7 +39,11 @@ class VoiceService:
                     type(error).__name__,
                 )
                 if started:
-                    self.store.mark_attempt(key, position, "uncertain")
+                    self.store.mark_attempt(
+                        key,
+                        position,
+                        "rejected" if isinstance(error, SheetLayoutError) else "uncertain",
+                    )
                 self.store.finish(key, "failed")
                 break
         else:
