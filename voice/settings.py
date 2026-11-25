@@ -20,6 +20,7 @@ class VoiceSettings:
     max_amount: Decimal = Decimal("10000000")
     ttl: int = 900
     timeout: int = 180
+    hermes_model: str = ""
     data_dir: Path = ROOT / "data"
     aliases_file: Path = ROOT / "category_aliases.json"
     bridge_command: tuple[str, ...] = ()
@@ -44,6 +45,7 @@ class VoiceSettings:
             max_amount=Decimal(os.getenv("VOICE_MAX_AMOUNT", "10000000")),
             ttl=int(os.getenv("VOICE_PENDING_TTL_SECONDS", "900")),
             timeout=int(os.getenv("HERMES_TIMEOUT_SECONDS", "180")),
+            hermes_model=os.getenv("HERMES_MODEL", "").strip(),
             data_dir=Path(os.getenv("VOICE_DATA_DIR", str(ROOT / "data"))),
             aliases_file=Path(
                 os.getenv("VOICE_CATEGORY_ALIASES_FILE", str(ROOT / "category_aliases.json"))

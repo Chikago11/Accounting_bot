@@ -45,7 +45,8 @@ def parse(request):
     from run_agent import AIAgent
 
     runtime = _resolve_runtime_agent_kwargs()
-    model = runtime.pop("model", None) or _resolve_gateway_model()
+    runtime_model = runtime.pop("model", None)
+    model = request.get("model") or runtime_model or _resolve_gateway_model()
     agent = AIAgent(
         model=model,
         **runtime,
@@ -71,7 +72,9 @@ def parse(request):
         text = result.get("final_response")
         if not isinstance(text, str) or not text.strip() or result.get("error"):
             raise ValueError("parser_failed")
-        return {"ok": True, "result": text}
+        if request.get("model") and agent.model != model:
+            raise RuntimeError("parser_model_mismatch")
+        return {"ok": True, "result": text, "model": agent.model}
     finally:
         agent.close()
 

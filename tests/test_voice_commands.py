@@ -93,6 +93,51 @@ class MenuRoutingTests(unittest.IsolatedAsyncioTestCase):
         operations, _ = parse_result(payload(command(action, **values)), VoiceSettings())
         await main.run_voice_command(operations[0], self.update, self.context)
 
+    async def test_back_follows_buttons_and_clears_category_without_model(self):
+        settings = VoiceSettings()
+        bridge = HermesBridge(settings)
+        bridge.call = AsyncMock(side_effect=AssertionError("Back must not call the model"))
+        cases = [
+            ({}, "menu_main", "main", None),
+            ({"menu": "budgets"}, "menu_main", "main", None),
+            ({"menu": "andrei"}, "menu_budgets", "budgets", None),
+            ({"menu": "max"}, "menu_budgets", "budgets", None),
+            ({"mode": "add"}, "menu_main", "main", None),
+            ({"mode": "sub"}, "menu_main", "main", None),
+            ({"mode": "add", "category": "Супермаркет"}, "expense_add_prompt", "main", "add"),
+            ({"mode": "sub", "category": "Бензин"}, "expense_sub_prompt", "main", "sub"),
+            ({"mode": "add_amb", "menu": "andrei"}, "menu_andrei", "andrei", None),
+            ({"mode": "sub_amb", "menu": "andrei"}, "menu_andrei", "andrei", None),
+            ({"mode": "add_mmb", "menu": "max"}, "menu_max", "max", None),
+            ({"mode": "sub_mmb", "menu": "max"}, "menu_max", "max", None),
+        ]
+        for dialog, action, menu, mode in cases:
+            with self.subTest(dialog=dialog):
+                self.context.user_data = dict(dialog)
+                operations, question = parse_result(await bridge.parse("Назад.", dialog), settings)
+                self.assertIsNone(question)
+                self.assertEqual(len(operations), 1)
+                self.assertEqual(operations[0].action, action)
+                self.assertIsNone(operations[0].category_id)
+                self.assertFalse(operations[0].is_write)
+                await main.run_voice_command(operations[0], self.update, self.context)
+                self.assertEqual(
+                    self.context.user_data, {"mode": mode, "category": None, "menu": menu}
+                )
+        bridge.call.assert_not_awaited()
+
+    async def test_back_normalization_does_not_swallow_other_commands(self):
+        bridge = HermesBridge(VoiceSettings())
+        answer = payload(command("andrei_show"))
+        bridge.call = AsyncMock(return_value={"ok": True, "result": answer})
+        for text in ("НАЗАД!", "  Вернись  назад. ", "Верни назад…"):
+            operations, _ = parse_result(await bridge.parse(text), VoiceSettings())
+            self.assertEqual(operations[0].action, "menu_main")
+        bridge.call.assert_not_awaited()
+        for text in ("Назад и добавь 500", "Два дня назад потратил 300 на бензин", "Назад 500"):
+            self.assertEqual(await bridge.parse(text), answer)
+            self.assertEqual(bridge.call.call_args.args[0]["context"]["transcript"], text)
+
     async def test_voice_budget_reads_use_existing_getters(self):
         for action, getter, menu in (
             ("andrei_show", "andrei_but", "andrei"),

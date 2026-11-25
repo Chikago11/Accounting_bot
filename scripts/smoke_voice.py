@@ -31,6 +31,7 @@ async def smoke(args):
             enabled=True,
             data_dir=Path(temp),
             bridge_command=tuple(json.loads(args.command)),
+            hermes_model=args.model,
         )
         bridge = HermesBridge(settings)
         written = []
@@ -91,6 +92,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--command", default=os.getenv("VOICE_BRIDGE_COMMAND"), help="JSON command argument array"
     )
+    parser.add_argument("--model", default=os.getenv("HERMES_MODEL", ""))
     args = parser.parse_args()
     if not args.command:
         parser.error("Set VOICE_BRIDGE_COMMAND or --command")

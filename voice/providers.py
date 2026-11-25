@@ -95,6 +95,32 @@ class HermesBridge:
             if dialog.get("menu") in ("main", "budgets", "andrei", "max")
             else "main",
         }
+        # A standalone back command follows the buttons, without an LLM guess.
+        normalized = " ".join(transcript.casefold().strip(" \t\r\n.,!?…").split())
+        if normalized in ("назад", "вернись назад", "верни назад"):
+            mode = safe_dialog["mode"]
+            if mode in ("add", "sub"):
+                action = f"expense_{mode}_prompt" if safe_dialog["category"] else "menu_main"
+            elif mode in ("add_amb", "sub_amb"):
+                action = "menu_andrei"
+            elif mode in ("add_mmb", "sub_mmb"):
+                action = "menu_max"
+            else:
+                action = "menu_budgets" if safe_dialog["menu"] in ("andrei", "max") else "menu_main"
+            return json.dumps(
+                {
+                    "operations": [
+                        {
+                            "action": action,
+                            "amount": None,
+                            "currency": self.settings.currency,
+                            "category_id": None,
+                            "occurred_at": None,
+                        }
+                    ],
+                    "clarification": None,
+                }
+            )
         context = {
             "transcript": transcript,
             "categories": CATEGORY_LABELS,
@@ -166,8 +192,11 @@ expense_*_prompt с этой категорией; «супермаркет 500�
                 "instruction": instruction,
                 "context": context,
                 "timeout": self.settings.timeout,
+                "model": self.settings.hermes_model,
             }
         )
         if not isinstance(result.get("result"), str):
             raise ProviderError("invalid_parser_response")
+        if self.settings.hermes_model and result.get("model") != self.settings.hermes_model:
+            raise ProviderError("parser_model_mismatch")
         return result["result"]

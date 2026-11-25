@@ -51,6 +51,12 @@ CASES = [
     ("max_menu", "Открой меню бюджета Макса", {}, [("menu_max", None, None)]),
     ("main_menu", "Главное меню", {}, [("menu_main", None, None)]),
     ("back", "Назад", {"menu": "max"}, [("menu_budgets", None, None)]),
+    (
+        "back_from_amount",
+        "Назад",
+        {"mode": "add", "category": "Супермаркет", "menu": "main"},
+        [("expense_add_prompt", None, None)],
+    ),
     ("expense_add_prompt", "Добавить расход", {}, [("expense_add_prompt", None, None)]),
     ("expense_sub_prompt", "Отменить расход", {}, [("expense_sub_prompt", None, None)]),
     (
@@ -75,7 +81,9 @@ CASES = [
 
 
 async def smoke(args):
-    settings = replace(VoiceSettings(), bridge_command=tuple(json.loads(args.command)))
+    settings = replace(
+        VoiceSettings(), bridge_command=tuple(json.loads(args.command)), hermes_model=args.model
+    )
     bridge = HermesBridge(settings)
     selected = [case for case in CASES if not args.case or case[0] == args.case]
     if not selected or (args.audio and len(selected) != 1):
@@ -99,6 +107,7 @@ async def smoke(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--command", default=os.getenv("VOICE_BRIDGE_COMMAND"))
+    parser.add_argument("--model", default=os.getenv("HERMES_MODEL", ""))
     parser.add_argument("--case", choices=[case[0] for case in CASES])
     parser.add_argument("--audio", type=Path, help="Synthetic audio for the selected case")
     args = parser.parse_args()

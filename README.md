@@ -121,8 +121,14 @@ Hermes получает только текст, категории, дейст�
 На этом сервере `scripts/hermes_voice_bridge.py` установлен в существующий контейнер
 Hermes. Общий API установленной версии не ограничивает инструменты отдельного
 запроса, поэтому используется headless `AIAgent` с `enabled_toolsets=[]` и проверкой
-пустого списка инструментов, без памяти и сохранения сессии. Провайдер и модель
-берутся из текущей настройки Hermes, STT — из его настроенного GigaAM.
+пустого списка инструментов, без памяти и сохранения сессии. Провайдер берётся из
+текущей настройки Hermes, STT — из его настроенного GigaAM. Модель разбора команд
+бота задаётся через `HERMES_MODEL`; на этом сервере используется `gpt-5.6-luna`.
+Пустое значение наследует модель Hermes. Адаптер проверяет выбранную модель;
+её несовпадение считается ошибкой разбора. Общая настройка модели Hermes не меняется.
+Отдельное «назад» (также «вернись назад», «верни назад») обрабатывается кодом по
+состоянию диалога: от ввода суммы расхода — к выбору категории, затем в главное
+меню; из ввода суммы бюджета — в его меню, затем в список бюджетов.
 
 Этот адаптер зависит от установленного Python-интерфейса Hermes. После обновления
 Hermes следует запустить smoke test. Транспорт можно заменить реализацией тех же
@@ -144,6 +150,7 @@ docker cp scripts/hermes_voice_bridge.py \
 ```ini
 [Service]
 Environment=VOICE_INPUT_ENABLED=true
+Environment=HERMES_MODEL=gpt-5.6-luna
 Environment='VOICE_BRIDGE_COMMAND=["docker","exec","-i","hermes-agent-owxa-hermes-agent-1","/opt/hermes/.venv/bin/python","/opt/data/scripts/accounting_voice_bridge.py"]'
 TimeoutStopSec=240
 ```
@@ -157,6 +164,9 @@ systemctl --user restart rich-family-bot
 
 Для отключения установите `VOICE_INPUT_ENABLED=false` в том же drop-in и
 перезапустите службу. Переменные systemd имеют приоритет над `.env`.
+Для возврата к прежней модели задайте `HERMES_MODEL=gpt-5.6-sol`, выполните
+`daemon-reload` и перезапустите службу. При обновлении сначала установите адаптер
+в контейнер, затем перезапускайте бота с новой настройкой модели.
 При выключенной функции дополнительные настройки не требуются, кнопки продолжают
 работать. Каталог `data/` сохраняйте между обновлениями и перезапусками.
 
@@ -202,6 +212,7 @@ Google API значения преобразуются в JSON-числа.
 
 ```bash
 export VOICE_BRIDGE_COMMAND='["docker","exec","-i","hermes-agent-owxa-hermes-agent-1","/opt/hermes/.venv/bin/python","/opt/data/scripts/accounting_voice_bridge.py"]'
+export HERMES_MODEL=gpt-5.6-luna
 .venv/bin/python scripts/smoke_voice.py --audio /tmp/accounting-voice-smoke.ogg
 # Только проверка Hermes, без аудио:
 .venv/bin/python scripts/smoke_voice.py
