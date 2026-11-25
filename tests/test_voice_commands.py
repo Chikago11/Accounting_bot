@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from zoneinfo import ZoneInfo
 
 import main
-from catalog import NAVIGATION_ACTIONS, READ_ACTIONS, VOICE_MENU_ACTIONS
+from catalog import NAVIGATION_ACTIONS, READ_ACTIONS, VOICE_MENU_ACTIONS, WRITE_ACTIONS
 from transactions import execute_operation
 from voice.handler import VoiceController
 from voice.models import parse_result, ValidationError
@@ -46,9 +46,51 @@ class CommandSchemaTests(unittest.TestCase):
                 self.assertFalse(operations[0].is_write)
                 self.assertIsNone(operations[0].to_dict()["amount"])
 
+    def test_null_currency_is_normalized_for_reads_and_navigation(self):
+        for action in READ_ACTIONS | NAVIGATION_ACTIONS:
+            with self.subTest(action=action):
+                operations, question = parse_result(
+                    payload(command(action, currency=None)), VoiceSettings()
+                )
+                self.assertIsNone(question)
+                self.assertFalse(operations[0].is_write)
+                self.assertEqual(operations[0].to_dict()["currency"], "THB")
+
+    def test_null_currency_is_rejected_for_every_write_action(self):
+        for action in WRITE_ACTIONS:
+            category = "fuel" if action.startswith("expense_") else None
+            with (
+                self.subTest(action=action),
+                self.assertRaisesRegex(ValidationError, "Unsupported currency"),
+            ):
+                parse_result(
+                    payload(command(action, amount=100, category_id=category, currency=None)),
+                    VoiceSettings(),
+                )
+
+    def test_explicit_unsupported_currency_is_rejected_for_every_action(self):
+        for action in READ_ACTIONS | NAVIGATION_ACTIONS | WRITE_ACTIONS:
+            category = "fuel" if action in ("expense_add", "expense_sub") else None
+            amount = 100 if action in WRITE_ACTIONS else None
+            for currency in ("USD", "RUB", "", False, 0, [], {}):
+                with (
+                    self.subTest(action=action, currency=currency),
+                    self.assertRaisesRegex(ValidationError, "Unsupported currency"),
+                ):
+                    parse_result(
+                        payload(
+                            command(action, amount=amount, category_id=category, currency=currency)
+                        ),
+                        VoiceSettings(),
+                    )
+
     def test_reads_and_writes_can_share_a_confirmation_package(self):
         operations, _ = parse_result(
-            payload(command("andrei_add", amount=500), command("andrei_show"), command("report")),
+            payload(
+                command("andrei_add", amount=500),
+                command("andrei_show", currency=None),
+                command("report", currency=None),
+            ),
             VoiceSettings(),
         )
         self.assertEqual([op.is_write for op in operations], [True, False, False])

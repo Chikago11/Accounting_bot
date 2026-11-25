@@ -104,7 +104,10 @@ def validate_operations(items, settings, now=None, stored=False):
                 raise ValidationError("Invalid amount") from error
         elif amount is not None:
             raise ValidationError("Read and menu commands must have amount=null")
-        if item["currency"] != settings.currency:
+        currency = item["currency"]
+        if currency is None and action not in WRITE_ACTIONS:
+            currency = settings.currency
+        if currency != settings.currency:
             raise ValidationError("Unsupported currency")
         raw_date = item["occurred_at"]
         if raw_date is None:
