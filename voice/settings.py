@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from urllib.parse import urlsplit
 from app_time import timezone_name
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -24,18 +25,34 @@ class VoiceSettings:
     data_dir: Path = ROOT / "data"
     aliases_file: Path = ROOT / "category_aliases.json"
     bridge_command: tuple[str, ...] = ()
+    bridge_url: str = ""
+    bridge_key_file: Path | None = None
 
     @classmethod
     def from_env(cls):
         if os.getenv("VOICE_INPUT_ENABLED", "false").lower() not in ("true", "1", "yes"):
             return cls()
-        command = json.loads(os.environ["VOICE_BRIDGE_COMMAND"])
+        url = os.getenv("VOICE_BRIDGE_URL", "").strip()
+        command = json.loads(os.getenv("VOICE_BRIDGE_COMMAND", "") or "[]")
         if (
             not isinstance(command, list)
-            or not command
             or not all(isinstance(x, str) and x for x in command)
+            or bool(command) == bool(url)
         ):
-            raise ValueError("VOICE_BRIDGE_COMMAND must be a JSON argument array")
+            raise ValueError("Set either VOICE_BRIDGE_URL or a VOICE_BRIDGE_COMMAND argument array")
+        key_file = None
+        if url:
+            endpoint = urlsplit(url)
+            if (
+                endpoint.scheme not in ("http", "https")
+                or not endpoint.hostname
+                or endpoint.username is not None
+                or endpoint.password is not None
+                or endpoint.query
+                or endpoint.fragment
+            ):
+                raise ValueError("Invalid VOICE_BRIDGE_URL")
+            key_file = Path(os.environ["VOICE_BRIDGE_KEY_FILE"])
         value = cls(
             enabled=True,
             currency=os.getenv("VOICE_DEFAULT_CURRENCY", "THB"),
@@ -51,6 +68,8 @@ class VoiceSettings:
                 os.getenv("VOICE_CATEGORY_ALIASES_FILE", str(ROOT / "category_aliases.json"))
             ),
             bridge_command=tuple(command),
+            bridge_url=url,
+            bridge_key_file=key_file,
         )
         ZoneInfo(value.timezone)
         if value.currency != "THB":

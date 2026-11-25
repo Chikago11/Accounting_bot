@@ -30,7 +30,9 @@ async def smoke(args):
             VoiceSettings(),
             enabled=True,
             data_dir=Path(temp),
-            bridge_command=tuple(json.loads(args.command)),
+            bridge_command=tuple(json.loads(args.command)) if args.command else (),
+            bridge_url=args.url or "",
+            bridge_key_file=args.key_file,
             hermes_model=args.model,
         )
         bridge = HermesBridge(settings)
@@ -93,7 +95,11 @@ if __name__ == "__main__":
         "--command", default=os.getenv("VOICE_BRIDGE_COMMAND"), help="JSON command argument array"
     )
     parser.add_argument("--model", default=os.getenv("HERMES_MODEL", ""))
+    parser.add_argument("--url", default=os.getenv("VOICE_BRIDGE_URL"))
+    parser.add_argument("--key-file", type=Path, default=os.getenv("VOICE_BRIDGE_KEY_FILE"))
     args = parser.parse_args()
-    if not args.command:
-        parser.error("Set VOICE_BRIDGE_COMMAND or --command")
+    if bool(args.command) == bool(args.url) or (args.url and not args.key_file):
+        parser.error(
+            "Choose --command or --url with --key-file (or corresponding VOICE_* variables)"
+        )
     asyncio.run(smoke(args))

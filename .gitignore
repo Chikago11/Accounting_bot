@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .env
+.voice-bridge.key
 data/
 .env.*.local
 .pytest_cache/

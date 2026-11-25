@@ -82,7 +82,11 @@ CASES = [
 
 async def smoke(args):
     settings = replace(
-        VoiceSettings(), bridge_command=tuple(json.loads(args.command)), hermes_model=args.model
+        VoiceSettings(),
+        bridge_command=tuple(json.loads(args.command)) if args.command else (),
+        bridge_url=args.url or "",
+        bridge_key_file=args.key_file,
+        hermes_model=args.model,
     )
     bridge = HermesBridge(settings)
     selected = [case for case in CASES if not args.case or case[0] == args.case]
@@ -107,10 +111,14 @@ async def smoke(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--command", default=os.getenv("VOICE_BRIDGE_COMMAND"))
+    parser.add_argument("--url", default=os.getenv("VOICE_BRIDGE_URL"))
+    parser.add_argument("--key-file", type=Path, default=os.getenv("VOICE_BRIDGE_KEY_FILE"))
     parser.add_argument("--model", default=os.getenv("HERMES_MODEL", ""))
     parser.add_argument("--case", choices=[case[0] for case in CASES])
     parser.add_argument("--audio", type=Path, help="Synthetic audio for the selected case")
     args = parser.parse_args()
-    if not args.command:
-        parser.error("Set VOICE_BRIDGE_COMMAND or --command")
+    if bool(args.command) == bool(args.url) or (args.url and not args.key_file):
+        parser.error(
+            "Choose --command or --url with --key-file (or corresponding VOICE_* variables)"
+        )
     asyncio.run(smoke(args))

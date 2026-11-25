@@ -513,8 +513,9 @@ def build_application():
         voice.acquire_worker()
         app.bot_data["voice"] = voice
         logging.getLogger(__name__).info(
-            "Voice input enabled; model=%s; durable confirmation store ready",
+            "Voice input enabled; model=%s; transport=%s; durable confirmation store ready",
             settings.hermes_model or "Hermes default",
+            "http" if settings.bridge_url else "command",
         )
         app.add_handler(MessageHandler(filters.VOICE, voice.receive, block=False))
         app.add_handler(CallbackQueryHandler(voice.callback, pattern=r"^voice:"))

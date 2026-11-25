@@ -1,0 +1,17 @@
+[Unit]
+Description=Accounting voice HTTP bridge inside Hermes
+
+[Service]
+Type=exec
+ExecStartPre=/usr/bin/docker exec --user hermes hermes-agent-owxa-hermes-agent-1 /opt/hermes/.venv/bin/python /opt/data/scripts/accounting_voice_server.py --stop
+ExecStart=/usr/bin/docker exec --user hermes --env HERMES_MODEL=gpt-5.6-luna hermes-agent-owxa-hermes-agent-1 /opt/hermes/.venv/bin/python /opt/data/scripts/accounting_voice_server.py
+ExecStop=/usr/bin/docker exec --user hermes hermes-agent-owxa-hermes-agent-1 /opt/hermes/.venv/bin/python /opt/data/scripts/accounting_voice_server.py --stop
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=240
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,9 @@
+*
+!Dockerfile
+!requirements.txt
+!*.py
+!category_aliases.json
+!voice/
+!voice/*.py
+!scripts/
+!scripts/*.py

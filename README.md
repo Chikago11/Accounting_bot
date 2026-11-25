@@ -46,12 +46,12 @@ chmod 600 .env service_account.json
 При записи расхода в ячейку с ручной формулой бот использует её вычисленную сумму
 и сохраняет новое итоговое число. Слагаемые не сохраняются.
 
-На текущем сервере работает пользовательская служба с включённым linger:
+На текущем сервере бот запускается через `compose.yaml`; подготовка описана ниже:
 
 ```bash
-systemctl --user status rich-family-bot
-systemctl --user restart rich-family-bot
-journalctl --user -u rich-family-bot -f
+docker compose ps
+docker compose restart bot
+docker compose logs -f bot
 ```
 
 Штатная остановка через SIGINT завершает обработку и закрывает приложение без
@@ -117,14 +117,25 @@ Telegram voice → текущий бот → STT (GigaAM в Hermes)
 Hermes получает только текст, категории, действия, валюту и время. Telegram-токен
 и Google-ключ остаются в боте. Второй Telegram consumer не запускается.
 
-`voice/providers.py` содержит интерфейсы STT/парсера и транспорт JSON через stdin.
-На этом сервере `scripts/hermes_voice_bridge.py` установлен в существующий контейнер
-Hermes. Общий API установленной версии не ограничивает инструменты отдельного
-запроса, поэтому используется headless `AIAgent` с `enabled_toolsets=[]` и проверкой
-пустого списка инструментов, без памяти и сохранения сессии. Провайдер берётся из
+`voice/providers.py` содержит интерфейсы STT/парсера и транспорт JSON через HTTP.
+Бот работает в отдельном контейнере от UID/GID 1000, без Docker-сокета и дополнительных
+прав, с системными файлами только для чтения. Запись разрешена в `data/` и временный
+`/tmp`; `.env` и Google-ключ подключены только для чтения и не включаются в образ.
+
+Во внутренней сети Hermes `scripts/hermes_voice_server.py` слушает порт 8646:
+`POST /voice` принимает только `transcribe` и `parse`, `GET /health` проверяет запуск.
+Оба адреса требуют отдельный Bearer-ключ. Порт не публикуется на хосте. Произвольные
+команды, пути к файлам и смена модели через запрос запрещены; запросы ограничены
+по размеру, времени и выполняются по одному.
+
+HTTP-сервер запускает существующий `scripts/hermes_voice_bridge.py` отдельным
+процессом под пользователем `hermes` внутри контейнера Hermes. Сохраняется headless
+`AIAgent` с `enabled_toolsets=[]` и проверкой пустого списка инструментов, без памяти
+и сохранения сессии. Временное аудио и дочерние процессы удаляются также при
+таймауте или обрыве HTTP-соединения. Провайдер берётся из
 текущей настройки Hermes, STT — из его настроенного GigaAM. Модель разбора команд
 бота задаётся через `HERMES_MODEL`; на этом сервере используется `gpt-5.6-luna`.
-Пустое значение наследует модель Hermes. Адаптер проверяет выбранную модель;
+Для HTTP модель должна совпадать с `HERMES_MODEL` службы моста. Адаптер проверяет выбранную модель;
 её несовпадение считается ошибкой разбора. Общая настройка модели Hermes не меняется.
 Отдельное «назад» (также «вернись назад», «верни назад») обрабатывается кодом по
 состоянию диалога: от ввода суммы расхода — к выбору категории, затем в главное
@@ -134,46 +145,84 @@ Hermes. Общий API установленной версии не ограни
 Hermes следует запустить smoke test. Транспорт можно заменить реализацией тех же
 интерфейсов без изменения обработчиков и финансовых функций.
 
-## Включение на сервере
+## Запуск в Docker на этом сервере
 
-Скопируйте адаптер в сохраняемый том уже работающего контейнера:
+Сначала создайте отдельный ключ моста; секреты не выводятся в терминал:
 
 ```bash
+python3 - <<'PY'
+import os
+from pathlib import Path
+import secrets
+Path("data").mkdir(mode=0o700, exist_ok=True)
+path = Path(".voice-bridge.key")
+if not path.exists():
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as stream:
+        stream.write(secrets.token_urlsafe(32))
+PY
+```
+
+Скопируйте адаптеры и ключ в сохраняемый том существующего Hermes:
+
+```bash
+docker exec hermes-agent-owxa-hermes-agent-1 mkdir -p /opt/data/accounting-voice
 docker cp scripts/hermes_voice_bridge.py \
   hermes-agent-owxa-hermes-agent-1:/opt/data/scripts/accounting_voice_bridge.py
+docker cp scripts/hermes_voice_server.py \
+  hermes-agent-owxa-hermes-agent-1:/opt/data/scripts/accounting_voice_server.py
+docker cp .voice-bridge.key \
+  hermes-agent-owxa-hermes-agent-1:/opt/data/accounting-voice/bridge.key
+docker exec hermes-agent-owxa-hermes-agent-1 chown -R hermes:hermes /opt/data/accounting-voice
+docker exec hermes-agent-owxa-hermes-agent-1 chmod 700 /opt/data/accounting-voice
+docker exec hermes-agent-owxa-hermes-agent-1 chmod 600 /opt/data/accounting-voice/bridge.key
 ```
 
-Задайте в `.env` параметры из `.env.example`: `VOICE_INPUT_ENABLED=true` и
-`VOICE_BRIDGE_COMMAND` — JSON-массив аргументов. На текущем сервере эти параметры
-задаются отдельным файлом `~/.config/systemd/user/rich-family-bot.service.d/voice.conf`:
-
-```ini
-[Service]
-Environment=VOICE_INPUT_ENABLED=true
-Environment=HERMES_MODEL=gpt-5.6-luna
-Environment='VOICE_BRIDGE_COMMAND=["docker","exec","-i","hermes-agent-owxa-hermes-agent-1","/opt/hermes/.venv/bin/python","/opt/data/scripts/accounting_voice_bridge.py"]'
-TimeoutStopSec=240
-```
-
-Пользователь службы должен иметь доступ к Docker. После изменений:
+Установите службу, которая поддерживает HTTP-мост внутри Hermes:
 
 ```bash
+mkdir -p ~/.config/systemd/user
+install -m 644 deploy/accounting-voice-bridge.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user restart rich-family-bot
+systemctl --user enable --now accounting-voice-bridge.service
 ```
 
-Для отключения установите `VOICE_INPUT_ENABLED=false` в том же drop-in и
-перезапустите службу. Переменные systemd имеют приоритет над `.env`.
-Для возврата к прежней модели задайте `HERMES_MODEL=gpt-5.6-sol`, выполните
-`daemon-reload` и перезапустите службу. При обновлении сначала установите адаптер
-в контейнер, затем перезапускайте бота с новой настройкой модели.
-При выключенной функции дополнительные настройки не требуются, кнопки продолжают
-работать. Каталог `data/` сохраняйте между обновлениями и перезапусками.
+У пользователя запускающего эту службу должен быть доступ к Docker и включён
+linger. Служба выполняет одну фиксированную команду `docker exec --user hermes`;
+обработчик HTTP находится внутри Hermes. Сам бюджетный бот доступа к Docker не получает.
+После остановки/перезапуска Hermes служба повторно запускает мост. Профили других
+приложений и основной процесс Hermes перезапускать не требуется.
 
-`TimeoutStopSec=240` даёт дополнительное время на штатное завершение работы.
-При принудительной остановке запись восстанавливается как неопределённая по журналу.
-Каждый запрос к адаптеру ограничен таймаутом; supervisor внутри контейнера
-завершает зависший процесс и его дочерние процессы, удаляет временное аудио.
+В `compose.yaml` уже заданы внутренняя сеть Hermes, URL, путь к ключу, Luna и лимиты.
+`.env`, `service_account.json` и `data/` остаются в папке проекта. UID/GID 1000
+совпадает с владельцем этих файлов на данном сервере; при переносе на другой
+сервер согласуйте владельца каталога данных и пользователя контейнера.
+
+Подготовьте образ и проверьте мост, затем остановите старый polling-процесс:
+
+```bash
+docker compose build bot
+docker compose run --rm --no-deps bot python scripts/smoke_voice.py
+systemctl --user disable --now rich-family-bot.service
+docker compose up -d bot
+docker compose logs --tail 30 bot
+```
+
+Бот автоматически стартует с Docker (`restart: unless-stopped`), мост — с user systemd.
+Одновременно запускать контейнер бота и старую службу нельзя: они используют один
+Telegram-токен и одну SQLite-базу. Контейнер подключает прежний `data/` напрямую,
+поэтому сохраняются ожидающие подтверждения и защита от повторной записи.
+
+Обновление кода: `docker compose up -d --build bot`. Обновление серверного адаптера:
+повторите копирование двух скриптов и перезапустите `accounting-voice-bridge.service`.
+Для смены модели измените её одновременно в Compose и службе моста.
+
+Старый транспорт `VOICE_BRIDGE_COMMAND` сохранён для отката. Остановите контейнер
+(`docker compose stop bot`) и только затем включите прежнюю службу
+(`systemctl --user enable --now /home/alfred/projects/Accounting_bot/rich-family-bot.service`). Её drop-in с командой
+`docker exec` сохранён на сервере. Такой откат возвращает прежние широкие права процесса.
+
+Остановка через SIGINT имеет запас 240 секунд. При принудительной остановке
+незавершённая запись восстанавливается как неопределённая по журналу.
 
 ## Повторы и ошибки записи
 
@@ -211,15 +260,17 @@ Google API значения преобразуются в JSON-числа.
 настоящие STT/Hermes и подменённые Telegram/записи. В рабочую таблицу ничего не пишет:
 
 ```bash
-export VOICE_BRIDGE_COMMAND='["docker","exec","-i","hermes-agent-owxa-hermes-agent-1","/opt/hermes/.venv/bin/python","/opt/data/scripts/accounting_voice_bridge.py"]'
-export HERMES_MODEL=gpt-5.6-luna
-.venv/bin/python scripts/smoke_voice.py --audio /tmp/accounting-voice-smoke.ogg
+docker compose run --rm --no-deps \
+  -v /tmp/accounting-voice-smoke.ogg:/tmp/smoke.ogg:ro \
+  bot python scripts/smoke_voice.py --audio /tmp/smoke.ogg
 # Только проверка Hermes, без аудио:
-.venv/bin/python scripts/smoke_voice.py
+docker compose run --rm --no-deps bot python scripts/smoke_voice.py
 # Проверка фраз для всех меню, бюджетов, отчётов и диалогового ввода суммы:
-.venv/bin/python scripts/smoke_voice_commands.py
+docker compose run --rm --no-deps bot python scripts/smoke_voice_commands.py
 # Проверка синтетического аудио «Покажи бюджет Андрея» через настоящий STT:
-.venv/bin/python scripts/smoke_voice_commands.py --case andrei_show --audio /tmp/budget-show.ogg
+docker compose run --rm --no-deps \
+  -v /tmp/budget-show.ogg:/tmp/budget-show.ogg:ro \
+  bot python scripts/smoke_voice_commands.py --case andrei_show --audio /tmp/budget-show.ogg
 ```
 
 Для полного теста аудио должно содержать пример с магазином на 1000 бат и бензином

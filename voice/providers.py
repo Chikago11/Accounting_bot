@@ -1,4 +1,4 @@
-"""Replaceable STT/parser interfaces; one bounded JSON-over-stdin transport."""
+"""Replaceable STT/parser interfaces with bounded HTTP and legacy stdin transports."""
 
 import asyncio
 import base64
@@ -8,6 +8,7 @@ import signal
 from datetime import datetime
 from typing import Protocol
 from zoneinfo import ZoneInfo
+import httpx
 
 from catalog import ACTION_LABELS, CATEGORY_LABELS, CATEGORIES, WRITE_ACTIONS, READ_ACTIONS
 
@@ -27,6 +28,11 @@ class IntentParser(Protocol):
 class HermesBridge:
     def __init__(self, settings):
         self.settings = settings
+        self.bridge_key = ""
+        if settings.bridge_url:
+            self.bridge_key = settings.bridge_key_file.read_text().strip()
+            if len(self.bridge_key) < 32:
+                raise ValueError("Voice bridge key must contain at least 32 characters")
         self.aliases = json.loads(settings.aliases_file.read_text())
         if (
             not isinstance(self.aliases, dict)
@@ -39,6 +45,46 @@ class HermesBridge:
             raise ValueError("Invalid category aliases")
 
     async def call(self, payload):
+        if self.settings.bridge_url:
+            output = await self.call_http(payload)
+        else:
+            output = await self.call_command(payload)
+        try:
+            result = json.loads(output)
+        except (ValueError, UnicodeError) as error:
+            raise ProviderError("bridge_protocol") from error
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            raise ProviderError("bridge_failed")
+        return result
+
+    async def call_http(self, payload):
+        try:
+            async with (
+                asyncio.timeout(self.settings.timeout + 10),
+                httpx.AsyncClient(
+                    timeout=httpx.Timeout(self.settings.timeout + 5, connect=5),
+                    trust_env=False,
+                    follow_redirects=False,
+                ) as client,
+                client.stream(
+                    "POST",
+                    self.settings.bridge_url,
+                    headers={"Authorization": f"Bearer {self.bridge_key}"},
+                    json=payload,
+                ) as response,
+            ):
+                if response.status_code != 200:
+                    raise ProviderError("bridge_http_failed")
+                output = bytearray()
+                async for chunk in response.aiter_bytes(chunk_size=4096):
+                    output.extend(chunk)
+                    if len(output) > 30000:
+                        raise ProviderError("bridge_response_too_large")
+                return bytes(output)
+        except httpx.HTTPError as error:
+            raise ProviderError("bridge_unavailable") from error
+
+    async def call_command(self, payload):
         # Command comes from trusted server configuration, never from a transcript.
         process = await asyncio.create_subprocess_exec(
             *self.settings.bridge_command,
@@ -62,13 +108,7 @@ class HermesBridge:
             raise
         if process.returncode or len(output) > 30000:
             raise ProviderError("bridge_failed")
-        try:
-            result = json.loads(output)
-        except (ValueError, UnicodeError) as error:
-            raise ProviderError("bridge_protocol") from error
-        if not isinstance(result, dict) or result.get("ok") is not True:
-            raise ProviderError("bridge_failed")
-        return result
+        return output
 
     async def transcribe(self, audio):
         result = await self.call(

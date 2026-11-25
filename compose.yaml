@@ -1,0 +1,46 @@
+name: accounting-bot
+
+services:
+  bot:
+    build: .
+    image: accounting-bot:local
+    init: true
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_signal: SIGINT
+    stop_grace_period: 240s
+    mem_limit: 512m
+    cpus: 0.75
+    pids_limit: 64
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    environment:
+      TZ: Asia/Bangkok
+      VOICE_INPUT_ENABLED: "true"
+      HERMES_MODEL: gpt-5.6-luna
+      VOICE_BRIDGE_COMMAND: ""
+      VOICE_BRIDGE_URL: http://hermes-agent:8646/voice
+      VOICE_BRIDGE_KEY_FILE: /run/secrets/voice_bridge_key
+      GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google_service_account
+      VOICE_DATA_DIR: /app/data
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./service_account.json:/run/secrets/google_service_account:ro
+      - ./.voice-bridge.key:/run/secrets/voice_bridge_key:ro
+      - ./data:/app/data
+    networks: [hermes]
+    labels:
+      traefik.enable: "false"
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  hermes:
+    external: true
+    name: hermes-agent-owxa_default
