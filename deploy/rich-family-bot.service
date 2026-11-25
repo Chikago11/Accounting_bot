@@ -1,0 +1,21 @@
+# Legacy host service: enable only after stopping the Docker bot.
+[Unit]
+Description=Rich Family Telegram Bot
+
+[Service]
+Type=simple
+WorkingDirectory=/home/alfred/projects/Accounting_bot
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TZ=Asia/Bangkok
+ExecStartPre=/home/alfred/projects/Accounting_bot/.venv/bin/python -c "from config import ALLOWED_USER_IDS, GOOGLE_SERVICE_ACCOUNT_FILE; from google.oauth2.service_account import Credentials; assert ALLOWED_USER_IDS, 'ALLOWED_USER_IDS must not be empty'; Credentials.from_service_account_file(str(GOOGLE_SERVICE_ACCOUNT_FILE))"
+ExecStart=/home/alfred/projects/Accounting_bot/.venv/bin/python /home/alfred/projects/Accounting_bot/main.py
+Restart=always
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

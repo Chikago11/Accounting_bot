@@ -1,7 +1,3 @@
-# main.py
-# systemctl --user status rich-family-bot
-# systemctl --user restart rich-family-bot
-# journalctl --user -u rich-family-bot -f
 import asyncio
 import logging
 from decimal import Decimal, InvalidOperation

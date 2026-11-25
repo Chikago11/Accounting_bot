@@ -1,0 +1,24 @@
+# Runtime versions from the verified production container.
+# Update together with requirements.txt after testing a clean build.
+anyio==4.16.0
+certifi==2026.11.20
+cffi==2.1.1
+charset-normalizer==3.5.3
+cryptography==50.0.2
+google-auth==2.63.1
+google-auth-oauthlib==1.5.0
+gspread==6.2.1
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
+oauthlib==4.0.1
+pyasn1==0.6.5
+pyasn1_modules==0.4.2
+pycparser==3.12
+python-dotenv==1.2.4
+python-telegram-bot==21.11.1
+requests==2.34.2
+requests-oauthlib==2.0.0
+typing_extensions==4.16.0
+urllib3==2.8.0

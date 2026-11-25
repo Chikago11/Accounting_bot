@@ -8,3 +8,5 @@ data/
 .env.*.local
 .pytest_cache/
 .ruff_cache/
+/CODEX_VOICE_HERMES_INTEGRATION.md
+/DOCKER_ISOLATION_HANDOFF_POLYMARKET.md

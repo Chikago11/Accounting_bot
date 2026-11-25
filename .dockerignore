@@ -1,6 +1,7 @@
 *
 !Dockerfile
 !requirements.txt
+!constraints.txt
 !*.py
 !category_aliases.json
 !voice/
